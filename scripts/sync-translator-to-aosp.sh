@@ -18,8 +18,16 @@ rsync -a --delete --exclude .git --exclude Android.bp "$U/" "$A/external/unicorn
 cp -f "$R/$D/unicorn.Android.bp" "$A/external/unicorn/Android.bp"
 rsync -a --delete --exclude third_party-build --exclude tests "$R/translator/" "$A/external/armtr/"
 rsync -a --delete "$R/$D/" "$A/$D/"
+# Guest (arm64) file set for the armtr_guest_root prebuilt_any (binaries, not in git): rebuilt every sync.
+G="${ARMTR_GUEST_ROOT:-/mnt/storage-adata/tmp/armtr-guest}"
+"$R/translator/bridge/guest/build_guest.sh" "$G" >/dev/null
+rsync -a --delete "$G/" "$A/$D/guest/"
+cp -f "$R/device/ours/pc_x86_64/ours_cf_x86_64_phone.mk" "$A/device/ours/pc_x86_64/ours_cf_x86_64_phone.mk"
 # art's libnativebridge-headers is not visible outside art/ and include_dirs on art/ is neverallow:
 # take a version-matched copy of the (Apache-2.0) header into the AOSP-side armtr copy only.
 mkdir -p "$A/external/armtr/bridge/include/nativebridge"
 cp -f "$A/art/libnativebridge/include/nativebridge/native_bridge.h" "$A/external/armtr/bridge/include/nativebridge/"
+# The bridge's own compile needs armtr/*.h; libarmtr_bridge only has armtr_bridge_headers (bridge/{.,include}),
+# so mirror them there too (adding libarmtr_headers to its header_libs would cost a full Soong re-analysis).
+cp -rf "$R/translator/include/armtr" "$A/external/armtr/bridge/include/"
 echo "synced into $A"

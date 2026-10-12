@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<!-- armtr bridge test app: arm64-v8a-only JNI library, see ../run_tests.sh and docs/translator/05-bridge.md -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ours.test.bridge">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
+  <application android:label="armtr test" android:extractNativeLibs="true">
+    <activity android:name="ours.test.MainActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

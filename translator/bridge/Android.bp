@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// NativeBridge shim sources. libarmtr_bridge (device/ours/pc_x86_64/translator/Android.bp) links them
-// together with the armtr modules; this replaces the old libours_nb skeleton.
+// NativeBridge sources. libarmtr_bridge (device/ours/pc_x86_64/translator/Android.bp) links them together with
+// the armtr modules. The guest (arm64) file set is assembled by guest/build_guest.sh (not Soong).
 
 package {
     default_applicable_licenses: ["armtr_license"],
@@ -8,7 +8,14 @@ package {
 
 filegroup {
     name: "armtr_bridge_srcs",
-    srcs: ["native_bridge.cc", "engine_stub.c"],
+    srcs: ["native_bridge.cc"],
+    visibility: ["//visibility:public"],
+}
+
+// x86_64 only (the JNI thunk table is SysV x86_64 code).
+filegroup {
+    name: "armtr_bridge_srcs_x86_64",
+    srcs: ["jni_thunks_x86_64.S"],
     visibility: ["//visibility:public"],
 }
 

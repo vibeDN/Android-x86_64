@@ -26,7 +26,7 @@ typedef struct { const char* name; const char* sig; void* fn; } armtr_proxy_def;
 #define ARMTR_PROXY(name, sig, fn) armtr_proxy_make(#name, sig, (void*)(fn))
 int armtr_proxy_make_table(const armtr_proxy_def* defs, int n);   // returns number registered OK
 
-// Bare stub (identity-mapped, 4-byte aligned, `ret`); optional raw trampoline instead of a sig adapter.
+// Bare stub (identity-mapped, 8-byte slot, host-writable, `ret`); optional raw trampoline instead of a sig adapter.
 uint64_t armtr_proxy_stub_alloc(void);
 uint64_t armtr_proxy_make_raw(const char* name, armtr_trampoline_fn fn, void* user);
 // Guest-visible (registered with armtr_mem_map), RW, zeroed, 16-aligned data; never freed.

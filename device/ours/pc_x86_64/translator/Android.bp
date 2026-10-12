@@ -11,12 +11,15 @@ cc_library_shared {
     name: "libarmtr_bridge",
     compile_multilib: "64",
     srcs: [":armtr_bridge_srcs"],
+    arch: {
+        x86_64: { srcs: [":armtr_bridge_srcs_x86_64"] },
+    },
     header_libs: ["jni_headers", "liblog_headers", "armtr_bridge_headers"],
-    shared_libs: ["liblog"],
-    // whole archive: nothing in the M0 bridge calls the engine yet, but the .so must carry it.
-    // Visibility: the version script (local: *) hides everything but NativeBridgeItf, so no
-    // -fvisibility=hidden here (it would also hide NativeBridgeItf).
+    shared_libs: ["liblog", "libdl"],
+    // Visibility: the version script (local: *) hides everything but NativeBridgeItf.
     whole_static_libs: [
+        "libarmtr_runtime",
+        "libarmtr_hostlibs",
         "libarmtr_engine",
         "libarmtr_loader",
         "libarmtr_syscalls",
@@ -27,6 +30,52 @@ cc_library_shared {
     version_script: "libarmtr_bridge.map",
     lto: { never: true },
     sanitize: { never: true },
-    // system_ext is not needed: libnativebridge dlopens it from the default namespace search path.
     // Soname must satisfy NativeBridgeNameAcceptable(): [a-zA-Z][a-zA-Z0-9._-]*
+}
+
+// Guest (arm64) runtime files in device layout: translator/bridge/guest/build_guest.sh output, copied to ./guest by
+// scripts/sync-translator-to-aosp.sh (binaries, not in git). Installed as plain files (no ELF checks, no
+// stripping). prebuilt_any is neverallowed in .bp files, so: prebuilt_bin (system/bin/armtr), prebuilt_etc, and
+// prebuilt_renderscript_bitcode, the one allowed prebuilt type whose 64-bit install dir is system/lib64.
+phony {
+    name: "armtr_guest_root",
+    required: ["armtr_guest_bin", "armtr_guest_ld_config", "armtr_guest_libs"],
+}
+
+prebuilt_bin {
+    name: "armtr_guest_bin",
+    sub_dir: "armtr",
+    srcs: [
+        "guest/system/bin/armtr/linker64",
+        "guest/system/bin/armtr/armtr_guest",
+    ],
+}
+
+prebuilt_etc {
+    name: "armtr_guest_ld_config",
+    src: "guest/system/etc/ld.config.arm64.txt",
+    filename: "ld.config.arm64.txt",
+}
+
+prebuilt_renderscript_bitcode {
+    name: "armtr_guest_libs",
+    compile_multilib: "64",
+    sub_dir: "armtr",
+    srcs: [
+        "guest/system/lib64/armtr/ld-android.so",
+        "guest/system/lib64/armtr/libc.so",
+        "guest/system/lib64/armtr/libm.so",
+        "guest/system/lib64/armtr/libdl.so",
+        "guest/system/lib64/armtr/libc++.so",
+        "guest/system/lib64/armtr/liblog.so",
+        "guest/system/lib64/armtr/libz.so",
+        "guest/system/lib64/armtr/libandroid.so",
+        "guest/system/lib64/armtr/libnativewindow.so",
+        "guest/system/lib64/armtr/libjnigraphics.so",
+        "guest/system/lib64/armtr/libEGL.so",
+        "guest/system/lib64/armtr/libGLESv1_CM.so",
+        "guest/system/lib64/armtr/libGLESv2.so",
+        "guest/system/lib64/armtr/libGLESv3.so",
+        "guest/system/lib64/armtr/libOpenSLES.so",
+    ],
 }

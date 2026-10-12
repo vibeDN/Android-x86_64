@@ -33,11 +33,12 @@ using namespace armtr_px;
 extern "C" uint64_t armtr_proxy_stub_alloc(void) {
   std::lock_guard<std::mutex> l(g_mu);
   if (g_stub_cur == g_stub_end) {
-    void* m = map_guest(kStubChunk, PROT_READ | PROT_EXEC, 5, true);
+    // Host-writable: armtr_trampoline_add writes its 8-byte `svc; ret` stub here (the engine ignores host prot).
+    void* m = map_guest(kStubChunk, PROT_READ | PROT_WRITE, 7, true);
     if (!m) return 0;
     g_stub_cur = (U)m; g_stub_end = g_stub_cur + kStubChunk;
   }
-  U a = g_stub_cur; g_stub_cur += 4; return a;
+  U a = g_stub_cur; g_stub_cur += 8; return a;
 }
 
 extern "C" void* armtr_proxy_data_alloc(size_t size) {

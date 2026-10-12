@@ -71,3 +71,21 @@ cc_library_static {
     export_include_dirs: ["proxy"],
     header_libs: ["jni_headers"],
 }
+
+// Guest process runtime shared by armtr-run and the bridge (image setup, syscall intercept, guest threads).
+cc_library_static {
+    name: "libarmtr_runtime",
+    defaults: ["armtr_defaults"],
+    srcs: ["runtime/guest_rt.cpp"],
+    export_include_dirs: ["runtime"],
+    static_libs: ["libarmtr_loader", "libarmtr_syscalls"],
+}
+
+// Host platform libraries (liblog, libandroid, EGL/GLES, OpenSL ES, ...) exposed to guest code.
+cc_library_static {
+    name: "libarmtr_hostlibs",
+    defaults: ["armtr_defaults"],
+    srcs: ["hostlibs/hostlibs.cpp"],
+    export_include_dirs: ["hostlibs"],
+    static_libs: ["libarmtr_proxy"],
+}

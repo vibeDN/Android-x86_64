@@ -1,6 +1,6 @@
 # armtr: ARM64 -> x86_64 translator / NativeBridge
 
-Design: `docs/translator/00..03`. Modules: engine (Unicorn glue), loader, syscalls, proxy, bridge, runner.
+Design: `docs/translator/00..05` (05 = the NativeBridge as built). Modules: engine (Unicorn glue), loader, syscalls, proxy, bridge, runner.
 
 ## Licensing
 - `translator/` (our code): GPL-2.0-or-later (SPDX header in every file). Needed because it links Unicorn.
@@ -25,7 +25,7 @@ not descend into symlinked directories (tested). Re-run after every edit. Then:
     . build/envsetup.sh && lunch ours_cf_x86_64_phone-trunk_staging-userdebug
     m -j2 libarmtr_bridge        # -> out/target/product/vsoc_x86_64/system/lib64/libarmtr_bridge.so
 
-Image inclusion is opt-in: `ARMTR_ENABLE=true` (see `device/ours/pc_x86_64/ours_cf_x86_64_phone.mk`,
+Image inclusion is on by default (`ARMTR_ENABLE=false` disables it) (see `device/ours/pc_x86_64/ours_cf_x86_64_phone.mk`,
 the AOSP copy of that file must be updated too). The bridge is selected with
 `ro.dalvik.vm.native.bridge=libarmtr_bridge.so`.
 
@@ -35,7 +35,8 @@ only, translated from Unicorn's CMakeLists), `translator/Android.bp` (engine/loa
 version script exports only `NativeBridgeItf`). Unicorn's generated config headers are checked in under
 `device/ours/pc_x86_64/translator/config/`.
 
-Notes: all Soong modules are `compile_multilib: "64"` (Unicorn needs int128). Currently the M0 bridge does not call
-the engine, so `--gc-sections` drops Unicorn from the .so (52 KB); it is pulled in once the bridge uses it.
+Notes: all Soong modules are `compile_multilib: "64"` (Unicorn needs int128). The guest (arm64) file set is not built by
+Soong: `translator/bridge/guest/build_guest.sh` (run by the sync script) -> `device/ours/pc_x86_64/translator/guest/`.
+Host tests of the bridge: `cmake -S translator/bridge -B <dir>` + `translator/bridge/tests/run_tests.sh <dir>` (docs 05).
 First Soong analysis after Android.bp changes took 25-30 min on this host under memory pressure
 (`m -j2 libarmtr_bridge` under `flock /mnt/storage-adata/tmp/aosp-build.lock`).

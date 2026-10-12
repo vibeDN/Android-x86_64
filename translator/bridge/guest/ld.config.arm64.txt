@@ -1,0 +1,12 @@
+# Guest (arm64) linker config, installed as /system/etc/ld.config.arm64.txt. The guest linker64 reads this
+# arch-specific file (kLdConfigArchFilePath) before /linkerconfig/ld.config.txt. Mirrors Berberis'
+# ld.config.riscv64.txt: one visible, non-isolated "default" namespace over /system/lib64/armtr. App
+# namespaces are created at runtime by libnativeloader through the bridge (parent = this "default").
+dir.system = /system
+dir.system = /data
+
+[system]
+namespace.default.visible = true
+namespace.default.isolated = false
+namespace.default.search.paths = /system/${LIB}/armtr
+namespace.default.permitted.paths = /system/${LIB}/armtr

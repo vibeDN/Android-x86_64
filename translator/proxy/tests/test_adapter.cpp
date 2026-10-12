@@ -106,7 +106,7 @@ int main() {
   armtr_proxy_def defs[] = {ARMTR_PROXY_DEF(t_a, "i(i)", f7), ARMTR_PROXY_DEF(t_b, "v(i)", f7)};
   CHECK(armtr_proxy_make_table(defs, 2) == 2);
   uint64_t s1 = armtr_proxy_stub_alloc(), s2 = armtr_proxy_stub_alloc();
-  CHECK(s1 && s2 == s1 + 4);
+  CHECK(s1 && s2 == s1 + 8);   // room for the engine's 8-byte svc+ret trampoline stub
   puts("test_adapter OK");
   return 0;
 }

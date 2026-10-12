@@ -8,8 +8,10 @@ Engine (Unicorn 2.1.4, GPL-2.0, see 01-engine-choice.md) behind `include/armtr/e
 | loader | `translator/loader/` | `loader.h` | engine (mem_map) |
 | syscalls | `translator/syscalls/` | `syscalls.h` | engine (types) |
 | proxy | `translator/proxy/` | `proxy.h` | engine |
-| runner | `translator/runner/` | `armtr-run` (docs 04) | all but bridge |
-| bridge | `translator/bridge/` | ART NativeBridgeCallbacks | all of the above |
+| runtime | `translator/runtime/` | `guest_rt.h`: guest process (exec setup, intercept, threads, `call`) | engine, loader, syscalls |
+| runner | `translator/runner/` | `armtr-run` (docs 04) | runtime |
+| hostlibs | `translator/hostlibs/` | `hostlibs.h`: platform libs (liblog, EGL, ...) for the guest | proxy |
+| bridge | `translator/bridge/` | ART NativeBridgeCallbacks (docs 05) | all of the above |
 | tests / guest userland | `translator/tests/` | arm64 test programs | - |
 
 Rules: every module builds and has unit tests on the host (glibc, cmake, `-j2`) first; Android.bp comes

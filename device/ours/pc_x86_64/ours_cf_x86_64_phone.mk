@@ -24,9 +24,21 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += ours_overlay_desktop
 PRODUCT_PACKAGES += OursLawnchair
 
-# ARM64 -> x86_64 NativeBridge (armtr). Opt-in: needs external/unicorn + external/armtr
-# (scripts/sync-translator-to-aosp.sh). Usage: ARMTR_ENABLE=true m ...
-ARMTR_ENABLE ?= false
+# ARM64 -> x86_64 NativeBridge (armtr), docs/translator/05-bridge.md. Needs external/unicorn + external/armtr +
+# device/ours/pc_x86_64/translator/guest (scripts/sync-translator-to-aosp.sh). Disable with ARMTR_ENABLE=false.
+# cuttlefish's vsoc_x86_64 BoardConfig already sets TARGET_NATIVE_BRIDGE_ABI := arm64-v8a, so
+# ro.product.cpu.abilist64 = x86_64,arm64-v8a.
+ARMTR_ENABLE ?= true
 ifeq ($(ARMTR_ENABLE),true)
-PRODUCT_PACKAGES += libarmtr_bridge
+PRODUCT_PACKAGES += libarmtr_bridge armtr_guest_root
+# Overrides `ro.dalvik.vm.native.bridge?=0` of build/make/target/product/runtime_libart.mk (like Berberis'
+# enable_riscv64_to_x86_64.mk). isa.arm64=x86_64 marks arm64 as emulated for PackageManager/ART (dex2oat isa).
+# ro.enable.native.bridge.exec is not set: no binfmt_misc runner for arm64 executables (apps only).
+PRODUCT_SYSTEM_PROPERTIES += \
+    ro.dalvik.vm.native.bridge=libarmtr_bridge.so \
+    ro.dalvik.vm.isa.arm64=x86_64
+# generic_system.mk's artifact path requirement forbids device-added system props unless allow-listed.
+PRODUCT_ARTIFACT_PATH_REQUIREMENT_SYSPROP_ALLOWED_LIST += ro.dalvik.vm.native.bridge ro.dalvik.vm.isa.arm64
+PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
+    system/lib64/libarmtr_bridge.so system/bin/armtr/% system/lib64/armtr/% system/etc/ld.config.arm64.txt
 endif
