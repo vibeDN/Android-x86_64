@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // armtr NativeBridge (callbacks v8): runs arm64-v8a JNI libraries inside an x86_64 app process.
-// Design: docs/translator/05-bridge.md (in short):
+// Design: docs/translator/05-native-bridge.md (in short):
 //  * initialize() boots a guest process in-process: the real guest linker64 loads /system/bin/armtr/armtr_guest,
 //    which initialises the guest libc once and parks the thread with a private syscall (ARMTR_NR_READY).
 //  * loadLibrary/dlsym/namespaces call the guest linker's exported __loader_* entry points on the engine.

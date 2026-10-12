@@ -24,7 +24,7 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += ours_overlay_desktop
 PRODUCT_PACKAGES += OursLawnchair
 
-# ARM64 -> x86_64 NativeBridge (armtr), docs/translator/05-bridge.md. Needs external/unicorn + external/armtr +
+# ARM64 -> x86_64 NativeBridge (armtr), docs/translator/05-native-bridge.md. Needs external/unicorn + external/armtr +
 # device/ours/pc_x86_64/translator/guest (scripts/sync-translator-to-aosp.sh). Disable with ARMTR_ENABLE=false.
 # cuttlefish's vsoc_x86_64 BoardConfig already sets TARGET_NATIVE_BRIDGE_ABI := arm64-v8a, so
 # ro.product.cpu.abilist64 = x86_64,arm64-v8a.

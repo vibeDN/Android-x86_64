@@ -2,7 +2,7 @@
 // armtr guest runtime: what a "guest process" needs on top of engine/loader/syscalls, shared by armtr-run
 // (runner/) and the NativeBridge (bridge/): execve-like image + stack setup, the syscall intercept
 // (exit, set_tid_address, path mapping, /proc/self/exe), guest threads (clone -> host pthread), and the
-// thread-local CPU of each host thread. See docs/translator/04-runner.md and 05-bridge.md.
+// thread-local CPU of each host thread. See docs/translator/04-runner.md and 05-native-bridge.md.
 #pragma once
 #include <stdint.h>
 #include <string>

@@ -1,5 +1,7 @@
 # 05 - NativeBridge (libarmtr_bridge): arm64-v8a JNI libraries in x86_64 app processes
 
+Status: M0-M3 work on the device; Yougram reaches its login screen with TDLib running in the guest (see Results).
+
 Date 2026-10-12. Code: `translator/bridge/` (+ `translator/runtime/`, shared with armtr-run). Design background: 02.
 
 ## How it works
@@ -42,6 +44,32 @@ ART/nativeloader/linkerconfig depends on the guest system dir (the bridge and ou
 * Image build used: `flock /mnt/storage-adata/tmp/aosp-build.lock /mnt/storage-adata/tmp/armtr-image-build.sh` (= build-aosp-own.sh
   with -j2 + memguard; log `/mnt/storage-adata/tmp/armtr-image-build.log`).
 
+## Enable / disable
+
+On by default: `ARMTR_ENABLE ?= true` in `device/ours/pc_x86_64/ours_cf_x86_64_phone.mk`; build with `ARMTR_ENABLE=false` to drop
+the bridge, guest files and the two properties (= stock image, `ro.dalvik.vm.native.bridge=0`). After any edit under `translator/`
+or the device dir: `scripts/sync-translator-to-aosp.sh` (also rebuilds the guest root). Changing an Android.bp or the product
+config costs a full Soong analysis (~25-30 min, ~14 GB RAM at peak); source-only edits rebuild in a few minutes.
+
+## Reproduce on the device
+
+```
+scripts/sync-translator-to-aosp.sh
+flock /mnt/storage-adata/tmp/aosp-build.lock /mnt/storage-adata/tmp/armtr-image-build.sh   # -j2 + memguard
+LCD_DENSITY=100 CMDLINE_EXTRA="console=ttyS0 androidboot.console=ttyS0" scripts/qemu/make-pc-image.sh /mnt/storage-adata/tmp/armtr-pc.img
+# APK disk (test APK + yougram):
+GUEST_LIBLOG=/mnt/storage-adata/tmp/armtr-guest/system/lib64/armtr/liblog.so translator/bridge/tests/build_test_lib.sh /mnt/storage-adata/tmp/armtr-apk
+translator/bridge/tests/apk/build_apk.sh /mnt/storage-adata/tmp/armtr-apk/libjni_bridge_test.so /mnt/storage-adata/tmp/armtr-apk/armtr-bridge-test.apk
+D=/mnt/storage-adata/tmp/armtr-apkdisk; mkdir -p $D/content; cp /mnt/storage-adata/tmp/armtr-apk/armtr-bridge-test.apk /mnt/storage-adata/apps/yougram/yougram.apk $D/content/
+/usr/sbin/mke2fs -q -t ext4 -d $D/content $D/apps.img 400M
+# boot (= gsi16/cf/run-pc-apps.sh with the apps disk path replaced)
+/mnt/storage-adata/tmp/armtr-run-pc.sh /mnt/storage-adata/tmp/armtr-pc.img &
+cd /mnt/storage-adata/gsi16/cf
+python3 con.py 'su 0 mkdir -p /mnt/apk; su 0 mount -o ro /dev/block/vda /mnt/apk; pm install /mnt/apk/armtr-bridge-test.apk' 60
+python3 con.py 'am start -W -n ours.test.bridge/ours.test.MainActivity' 30; grep armtr-test logcat.log     # expect ALL PASS
+python3 con.py 'pm install /mnt/apk/yougram.apk; am start -W -n app.yougram/.LauncherClassic' 180; grep " armtr " logcat.log
+```
+
 ## Tests
 
 Host (glibc), fake ART: `cmake -S translator/bridge -B /mnt/storage-adata/tmp/bridge-build && cmake --build /mnt/storage-adata/tmp/bridge-build -j2`
@@ -57,9 +85,18 @@ through ART-like trampolining, natives by name, 18-arg FP/int mix with stack spi
 Device: `tests/apk/build_apk.sh <libjni_bridge_test.so> <out.apk>` (javac/d8/aapt2/zipalign/apksigner, no Gradle; arm64-v8a only,
 `extractNativeLibs=true`); the activity runs the same natives and logs `armtr-test` PASS/FAIL lines.
 
+## Performance
+
+* Guest boot (linker64 + libc init under Unicorn) in `initialize`: ~85-90 ms on the QEMU/KVM guest, ~80 ms on the host.
+* Host->guest JNI call through a thunk: ~3.0 us for a trivial native, ~3.8 us with errno/TLS work (host, 200k calls). Dominated by
+  full register-file batches (`armtr_regs_get/set`) + `uc_emu_start` per call; cheap wins: save/restore only x0-x7/v0-v7/sp/lr/pc.
+* Yougram cold start to first frame: TotalTime 959 ms (`am start -W`), vs 368 ms for the trivial test app.
+* Memory: 16 MiB TCG buffer per guest CPU (main thread + every attached/guest thread), guest stacks NORESERVE.
+
 ## Not done / limits
 
-Guest signal delivery; host fallback for x86_64 libs placed in lib/arm64; `extractNativeLibs=false` (`base.apk!/lib/arm64-v8a/`, the
+Guest signal delivery (guest `sigaction` handlers are recorded, never run; SIG_IGN is mirrored; engine faults are reported via
+libsigchain-chained SIGSEGV/SIGBUS); host fallback for x86_64 libs placed in lib/arm64; `extractNativeLibs=false` (`base.apk!/lib/arm64-v8a/`, the
 guest linker supports zip paths but it is untested); non-JNI `getTrampoline` (shorty == null, e.g. `ANativeActivity_onCreate`);
 `long double` conversions; guest thread record cleanup on host thread exit; the guest `fork()`.
 
@@ -73,3 +110,10 @@ guest linker supports zip paths but it is untested); non-JNI `getTrampoline` (sh
   `base.apk!/lib/arm64-v8a`, natives resolve, TDLib worker threads attach; the app reaches its phone-number login screen. No guest
   fault / unavailable host function in logcat. libyougram_voip.so is only loaded for calls (not exercised); on the host its
   JNI_OnLoad runs (probe_lib).
+* TDLib does initialise in the guest: `files/tdlib/td.binlog` and `db.sqlite` (+WAL) are created and the UI shows the
+  `authorizationStateWaitPhoneNumber` screen. Network was NOT exercised: the QEMU guest has no default route (`ip route` empty,
+  no TCP sockets in the process), so the first real gap is still open: sockets/DNS from guest code (syscalls translate
+  socket/connect/epoll; untested end-to-end on device). On the host, TDLib's client threads run and answer `getOption`.
+* First failing points seen: none in the bridge. Unrelated noise: SELinux denials for RenderThread on /dev/dri/card0 (host HWUI).
+  Next steps for Yougram: network in the VM, then a login; a call to exercise libyougram_voip (OpenSL ES/EGL proxies, realtime
+  audio on Unicorn is expected to be too slow).
