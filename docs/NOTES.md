@@ -63,6 +63,11 @@ Findings from reading WMShell (`DesktopDisplayEventHandler`, `DesktopDisplayMode
   A plain USB mouse is not a touchpad, so for a PC product the flag is disabled
   (`patches/0003-release-disable-form-factor-desktop-first.patch`) and the display keeps the freeform mode
   from `display_settings.xml`.
+- The dev-option override (`persist.wm.debug.desktop_experience_devopts=true`) forces every flag marked
+  overridable in `DesktopExperienceFlags` to true, so the release-config value alone was ignored; the
+  form-factor flag is made non-overridable in the enum
+  (`patches/0004-frameworks-form-factor-flag-not-overridable.patch`). With both patches a clean system
+  opens every app in a freeform window of the default desk.
 - `ignoreOrientationRequest="true"` (taken from the Cuttlefish foldable product) lets windows keep their
   shape when an app asks for a fixed orientation.
 - The Cuttlefish foldable product itself only adds hinge/lid device states and a two-display layout

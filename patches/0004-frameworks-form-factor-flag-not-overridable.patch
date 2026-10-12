@@ -1,0 +1,13 @@
+diff --git a/core/java/android/window/DesktopExperienceFlags.java b/core/java/android/window/DesktopExperienceFlags.java
+index 2ff6784c5..63ec73a3e 100644
+--- a/core/java/android/window/DesktopExperienceFlags.java
++++ b/core/java/android/window/DesktopExperienceFlags.java
+@@ -331,7 +331,7 @@ public enum DesktopExperienceFlags {
+     FORCE_CLOSE_TOP_TRANSPARENT_FULLSCREEN_TASK(
+             Flags::forceCloseTopTransparentFullscreenTask, true,
+             Flags.FLAG_FORCE_CLOSE_TOP_TRANSPARENT_FULLSCREEN_TASK),
+-    FORM_FACTOR_BASED_DESKTOP_FIRST_SWITCH(Flags::formFactorBasedDesktopFirstSwitch, true,
++    FORM_FACTOR_BASED_DESKTOP_FIRST_SWITCH(Flags::formFactorBasedDesktopFirstSwitch, false,
+             Flags.FLAG_FORM_FACTOR_BASED_DESKTOP_FIRST_SWITCH),
+     HANDLE_INCOMPATIBLE_TASKS_IN_DESKTOP_LAUNCH_PARAMS(
+             Flags::handleIncompatibleTasksInDesktopLaunchParams, false,

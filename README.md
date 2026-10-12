@@ -9,7 +9,7 @@ for x86_64 machines (DeX-style windowing + Material You), with root platform sup
 - AOSP 16 (`android16-qpr2-release`) builds for x86_64 from our own product `ours_cf_x86_64_phone`.
 - Boots on our own kernel (Android common kernel 6.12 + Rust, built with the AOSP Rust/clang toolchain)
   with our own kernel modules and `vendor_dlkm` / `system_dlkm` images, in QEMU/KVM.
-- Keyboard and mouse input work; Android desktop windowing (freeform windows, Material You captions,
+- Keyboard and mouse input work; Android desktop windowing (apps open in freeform windows by default, Material You captions,
   taskbar) is enabled from the image.
 - **Not done yet:** real hardware boot (installer image, GPU drivers: Mesa NVK/nouveau for NVIDIA),
   KernelSU/Zygisk, ARM→x86 translator, our own desktop shell (see `design/`).
