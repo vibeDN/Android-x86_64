@@ -22,3 +22,4 @@ PRODUCT_COPY_FILES += \
 
 # Framework config overlay (desktop mode on the internal display)
 PRODUCT_PACKAGES += ours_overlay_desktop
+PRODUCT_PACKAGES += OursLawnchair

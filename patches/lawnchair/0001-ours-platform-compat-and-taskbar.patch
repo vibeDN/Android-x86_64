@@ -1,0 +1,175 @@
+diff --git a/build.gradle b/build.gradle
+index d0421b5..c5ca638 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -292,7 +292,7 @@ android {
+             res.srcDirs = ['res']
+ 
+             // Lawnchair-TODO: Don't include Compose Disabled, but there's has to be another way of making this NOT long
+-            java.srcDirs = ['src', 'src_plugins', 'compose/facade/core', 'compose/facade/enabled', 'compose/features']
++            java.srcDirs = ['src', 'src_plugins', 'ours_flag_stubs', 'compose/facade/core', 'compose/facade/enabled', 'compose/features']
+             kotlin.directories.addAll('src', 'src_plugins', 'compose/facade/core', 'compose/facade/enabled', 'compose/features')
+ 
+             manifest.srcFile 'AndroidManifest-common.xml'
+diff --git a/lawnchair/res/xml/device_profiles.xml b/lawnchair/res/xml/device_profiles.xml
+index f5a27bc..d5db068 100644
+--- a/lawnchair/res/xml/device_profiles.xml
++++ b/lawnchair/res/xml/device_profiles.xml
+@@ -25,7 +25,7 @@
+         launcher:numFolderColumns="3"
+         launcher:numHotseatIcons="3"
+         launcher:dbFile="launcher_3_by_3.db"
+-        launcher:defaultLayoutId="@xml/default_workspace_3x3"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:deviceCategory="phone" >
+ 
+         <display-option
+@@ -60,7 +60,7 @@
+         launcher:numExtendedHotseatIcons="6"
+         launcher:devicePaddingId="@xml/paddings_4x5"
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_split"
+-        launcher:defaultLayoutId="@xml/default_workspace_4x5"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:deviceCategory="phone|multi_display" >
+ 
+         <display-option
+@@ -128,7 +128,7 @@
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_6_5"
+         launcher:devicePaddingId="@xml/paddings_6x5"
+         launcher:dbFile="launcher_6_by_5.db"
+-        launcher:defaultLayoutId="@xml/default_workspace_6x5"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:inlineQsb="landscape"
+         launcher:deviceCategory="tablet|desktop" >
+ 
+diff --git a/lawnchair/src/app/lawnchair/preferences2/PreferenceManager2.kt b/lawnchair/src/app/lawnchair/preferences2/PreferenceManager2.kt
+index b6e7ff9..23c2ea5 100644
+--- a/lawnchair/src/app/lawnchair/preferences2/PreferenceManager2.kt
++++ b/lawnchair/src/app/lawnchair/preferences2/PreferenceManager2.kt
+@@ -717,7 +717,7 @@ class PreferenceManager2 @Inject constructor(
+ 
+     val enableTaskbarOnPhone = preference(
+         key = booleanPreferencesKey("enable_taskbar_on_phone"),
+-        defaultValue = false,
++        defaultValue = true,
+         onSet = {
+             reloadHelper.reloadGrid()
+             reloadHelper.reloadTaskbar()
+diff --git a/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java b/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
+index 323372b..08455e0 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/NavbarButtonsViewController.java
+@@ -87,7 +87,6 @@ import android.view.ViewGroup;
+ import android.view.ViewTreeObserver;
+ import android.view.WindowManager;
+ import android.view.accessibility.AccessibilityNodeInfo;
+-import android.view.inputmethod.Flags;
+ import android.widget.FrameLayout;
+ import android.widget.ImageView;
+ import android.widget.LinearLayout;
+@@ -316,7 +315,7 @@ public class NavbarButtonsViewController implements TaskbarControllers.LoggableT
+         mIsImeRenderingNavButtons = mContext.imeDrawsImeNavBar();
+         if (!mIsImeRenderingNavButtons) {
+             // IME switcher
+-            final int switcherResId = Flags.imeSwitcherRevamp()
++            final int switcherResId = false /* ours: platform android16-qpr2 has no ime switcher revamp flag */
+                     ? com.android.internal.R.drawable.ic_ime_switcher_new
+                     : R.drawable.ic_ime_switcher;
+             mImeSwitcherButton = addButton(switcherResId, BUTTON_IME_SWITCH,
+diff --git a/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java b/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java
+index b19a190..a0f120d 100644
+--- a/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java
++++ b/quickstep/src/com/android/launcher3/taskbar/TaskbarNavButtonController.java
+@@ -45,7 +45,6 @@ import android.util.Log;
+ import android.view.HapticFeedbackConstants;
+ import android.view.KeyEvent;
+ import android.view.View;
+-import android.view.inputmethod.Flags;
+ 
+ import androidx.annotation.IntDef;
+ import androidx.annotation.Nullable;
+@@ -239,7 +238,7 @@ public class TaskbarNavButtonController implements TaskbarControllers.LoggableTa
+                 }
+                 return true;
+             case BUTTON_IME_SWITCH:
+-                if (Flags.imeSwitcherRevamp()) {
++                if (false /* ours: platform android16-qpr2 has no ime switcher revamp flag */) {
+                     logEvent(LAUNCHER_TASKBAR_IME_SWITCHER_BUTTON_LONGPRESS);
+                     onImeSwitcherLongPress();
+                     view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS,
+diff --git a/res/xml/default_workspace_ours.xml b/res/xml/default_workspace_ours.xml
+new file mode 100644
+index 0000000..67181fb
+--- /dev/null
++++ b/res/xml/default_workspace_ours.xml
+@@ -0,0 +1,21 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Android-x86_64: default favorites for the PC build (AOSP apps). Apache-2.0 -->
++<favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3">
++    <favorite launcher:container="-101" launcher:screen="0" launcher:x="0" launcher:y="0"
++        launcher:packageName="com.android.documentsui" launcher:className="com.android.documentsui.LauncherActivity" />
++    <favorite launcher:container="-101" launcher:screen="1" launcher:x="1" launcher:y="0"
++        launcher:packageName="com.android.settings" launcher:className="com.android.settings.Settings" />
++    <favorite launcher:container="-101" launcher:screen="2" launcher:x="2" launcher:y="0"
++        launcher:packageName="com.android.gallery3d" launcher:className="com.android.gallery3d.app.GalleryActivity" />
++    <favorite launcher:container="-101" launcher:screen="3" launcher:x="3" launcher:y="0"
++        launcher:packageName="com.android.dialer" launcher:className="com.android.dialer.main.impl.MainActivity" />
++    <favorite launcher:container="-101" launcher:screen="4" launcher:x="4" launcher:y="0"
++        launcher:packageName="com.android.messaging" launcher:className="com.android.messaging.ui.conversationlist.ConversationListActivity" />
++    <favorite launcher:container="-101" launcher:screen="5" launcher:x="5" launcher:y="0"
++        launcher:packageName="com.android.deskclock" launcher:className="com.android.deskclock.DeskClock" />
++    <favorite launcher:container="-101" launcher:screen="6" launcher:x="6" launcher:y="0"
++        launcher:packageName="org.chromium.webview_shell" launcher:className="org.chromium.webview_shell.WebViewBrowserActivity" />
++    <resolve launcher:container="-101" launcher:screen="7" launcher:x="7" launcher:y="0">
++        <favorite launcher:uri="#Intent;action=android.media.action.STILL_IMAGE_CAMERA;end" />
++    </resolve>
++</favorites>
+diff --git a/res/xml/device_profiles.xml b/res/xml/device_profiles.xml
+index 2a26aed..314f14d 100644
+--- a/res/xml/device_profiles.xml
++++ b/res/xml/device_profiles.xml
+@@ -25,7 +25,7 @@
+         launcher:numFolderColumns="3"
+         launcher:numHotseatIcons="3"
+         launcher:dbFile="launcher_3_by_3.db"
+-        launcher:defaultLayoutId="@xml/default_workspace_3x3"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:deviceCategory="phone" >
+ 
+         <display-option
+@@ -60,7 +60,7 @@
+         launcher:numExtendedHotseatIcons="6"
+         launcher:dbFile="launcher_4_by_4.db"
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_split"
+-        launcher:defaultLayoutId="@xml/default_workspace_4x4"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:deviceCategory="phone|multi_display" >
+ 
+         <display-option
+@@ -125,7 +125,7 @@
+         launcher:numExtendedHotseatIcons="6"
+         launcher:dbFile="launcher.db"
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_split"
+-        launcher:defaultLayoutId="@xml/default_workspace_5x5"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:deviceCategory="phone|multi_display" >
+ 
+         <display-option
+@@ -173,7 +173,7 @@
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_6_5"
+         launcher:devicePaddingId="@xml/paddings_6x5"
+         launcher:dbFile="launcher_6_by_5.db"
+-        launcher:defaultLayoutId="@xml/default_workspace_6x5"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:deviceCategory="tablet|desktop" >
+ 
+         <display-option
+@@ -228,7 +228,7 @@
+         launcher:devicePaddingId="@xml/paddings_3_row"
+         launcher:gridSizeSpecsId="@xml/spec_col_count_3_row"
+         launcher:isFixedLandscape="true"
+-        launcher:defaultLayoutId="@xml/default_workspace_8x3"
++        launcher:defaultLayoutId="@xml/default_workspace_ours"
+         launcher:deviceCategory="phone">
+ 
+         <display-option

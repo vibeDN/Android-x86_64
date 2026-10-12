@@ -1,0 +1,19 @@
+// Lawnchair (GPLv3 additions over Apache-2.0 Launcher3) built separately with Gradle, imported as the home app.
+android_app_import {
+    name: "OursLawnchair",
+    apk: "Lawnchair.apk",
+    privileged: true,
+    system_ext_specific: true,
+    certificate: "platform",
+    overrides: ["Launcher3QuickStep", "Launcher3", "Launcher3Go", "Launcher3QuickStepGo"],
+    dex_preopt: { enabled: false },
+    required: ["privapp-permissions-lawnchair"],
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-lawnchair",
+    src: "privapp-permissions-lawnchair.xml",
+    sub_dir: "permissions",
+    system_ext_specific: true,
+    filename_from_src: true,
+}

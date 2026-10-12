@@ -101,3 +101,14 @@ Needed for the first boot on any PC without a native GPU driver. Three fixes wer
    and the hwcomposer needs it).
 3. Test display: legacy VGA (`-device VGA`) switches to an 8-bit mode after the kernel starts and shows garbage.
    Use `ramfb` (plain linear framebuffer, like a UEFI GOP on real hardware) in QEMU.
+
+## Lawnchair (home app + taskbar)
+
+Lawnchair `16-dev` (GPLv3 additions over Apache-2.0 Launcher3) is built separately with Gradle
+(JDK 21, SDK platform 37.2, build-tools 37) and imported as a privileged system_ext app
+(`device/ours/pc_x86_64/lawnchair/`, the APK itself is not in the repo). It targets a newer platform than
+android16-qpr2, so `patches/lawnchair/` carries our changes: no ime-switcher flag, taskbar on by default,
+our default layout (`lawnchair/default_workspace_ours.xml`), and `lawnchair/ours_flag_stubs/` (aconfig
+`Flags` classes are hidden from apps on the platform, so local stand-ins with all flags off are bundled).
+The product overlay points `config_recentsComponentName` at Lawnchair so Quickstep/taskbar run.
+Tablet layout needs sw>=600dp: QEMU ramfb is 800x600, so test with `LCD_DENSITY=100 make-pc-image.sh`.

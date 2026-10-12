@@ -12,7 +12,19 @@ SIZE=${2:-18}
 P=${PRODUCT_OUT:-/mnt/storage-adata/aosp15/out/target/product/vsoc_x86_64}
 H=${HOST_BIN:-/mnt/storage-adata/aosp15/out/host/linux-x86/bin}
 C=${CF_DIR:-/mnt/storage-adata/gsi16/cf}          # unpacked boot images: $C/boot/kernel, $C/initrd.img
-CMDLINE_EXTRA=${CMDLINE_EXTRA:-}
+# Default Android boot args: vendor APEX selection, graphics stack, display density, vsock ports.
+DEFAULT_ARGS="androidboot.vendor.apex.com.android.hardware.keymint=com.android.hardware.keymint.rust_nonsecure \
+androidboot.vendor.apex.com.android.hardware.gatekeeper=com.android.hardware.gatekeeper.nonsecure \
+androidboot.vendor.apex.com.android.hardware.secure_element=com.android.hardware.secure_element \
+androidboot.vendor.apex.com.android.hardware.strongbox=none \
+androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.drm_hwcomposer \
+androidboot.vendor.apex.com.google.emulated.camera.provider.hal=com.google.emulated.camera.provider.hal \
+androidboot.lcd_density=${LCD_DENSITY:-160} androidboot.cpuvulkan.version=4206592 androidboot.hardware.gralloc=minigbm \
+androidboot.hardware.hwcomposer=drm androidboot.hardware.hwcomposer.display_finder_mode=drm \
+androidboot.hardware.hwcomposer.display_framebuffer_format=bgra androidboot.hardware.egl=angle \
+androidboot.hardware.vulkan=pastel androidboot.opengles.version=196609 androidboot.setupwizard_mode=DISABLED \
+androidboot.vsock_lights_port=6900 androidboot.vsock_camera_port=6901 androidboot.vsock_tombstone_port=6902"
+CMDLINE_EXTRA="$DEFAULT_ARGS ${CMDLINE_EXTRA:-}"
 WORKDIR=${WORKDIR:-/mnt/storage-adata/tmp}; mkdir -p "$WORKDIR"
 W=$(mktemp -d -p "$WORKDIR")
 trap 'rm -rf "$W"' EXIT
