@@ -1,0 +1,162 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Soong build of Unicorn 2.1.4 (aarch64 target only, x86_64 host). Lives in our repo
+// (device/ours/pc_x86_64/translator/unicorn.Android.bp); scripts/sync-translator-to-aosp.sh
+// symlinks it to external/unicorn/Android.bp next to the CF_PARALLEL-patched checkout
+// (scripts/fetch-unicorn.sh). Translated from src/CMakeLists.txt; keep in sync on version bumps.
+// Generated config headers are checked in under device/ours/pc_x86_64/translator/config.
+
+package {
+    default_visibility: ["//visibility:public"],
+    default_applicable_licenses: ["external_unicorn_license"],
+}
+
+license {
+    name: "external_unicorn_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["SPDX-license-identifier-GPL-2.0"],
+    license_text: ["COPYING"],
+}
+
+cc_defaults {
+    name: "unicorn_defaults",
+    host_supported: false,
+    cflags: [
+        "-Wno-everything",
+        "-fPIC",
+        "-fvisibility=hidden",
+        "-mcx16",
+        "-D_GNU_SOURCE",
+        "-D_FILE_OFFSET_BITS=64",
+        "-D_LARGEFILE_SOURCE",
+        "-DUNICORN_HAS_ARM64",
+        "-fno-strict-aliasing",
+    ],
+    conlyflags: ["-std=gnu11"],
+    include_dirs: ["device/ours/pc_x86_64/translator/config"], // config-host.h
+    local_include_dirs: [
+        "glib_compat",
+        "qemu",
+        "qemu/include",
+        "include",
+        "qemu/tcg",
+        "qemu/tcg/i386",
+    ],
+    lto: { never: true },
+    sanitize: { never: true },
+    stl: "none",
+}
+
+cc_library_static {
+    name: "libunicorn_common",
+    defaults: ["unicorn_defaults"],
+    srcs: [
+        "list.c",
+        "glib_compat/glib_compat.c",
+        "glib_compat/gtestutils.c",
+        "glib_compat/garray.c",
+        "glib_compat/gtree.c",
+        "glib_compat/grand.c",
+        "glib_compat/glist.c",
+        "glib_compat/gmem.c",
+        "glib_compat/gpattern.c",
+        "glib_compat/gslice.c",
+        "qemu/util/bitmap.c",
+        "qemu/util/bitops.c",
+        "qemu/util/crc32c.c",
+        "qemu/util/cutils.c",
+        "qemu/util/getauxval.c",
+        "qemu/util/guest-random.c",
+        "qemu/util/host-utils.c",
+        "qemu/util/osdep.c",
+        "qemu/util/qdist.c",
+        "qemu/util/qemu-timer.c",
+        "qemu/util/qemu-timer-common.c",
+        "qemu/util/range.c",
+        "qemu/util/qht.c",
+        "qemu/util/pagesize.c",
+        "qemu/util/cacheinfo.c",
+        "qemu/crypto/aes.c",
+        "qemu/util/oslib-posix.c",
+        "qemu/util/qemu-thread-posix.c",
+    ],
+}
+
+cc_library_static {
+    name: "libunicorn_aarch64_softmmu",
+    defaults: ["unicorn_defaults"],
+    cflags: [
+        "-DNEED_CPU_H",
+        "-include aarch64.h",
+    ],
+    local_include_dirs: ["qemu/target/arm"],
+    include_dirs: ["device/ours/pc_x86_64/translator/config/aarch64-softmmu"], // config-target.h
+    srcs: [
+        "qemu/exec.c",
+        "qemu/exec-vary.c",
+        "qemu/softmmu/cpus.c",
+        "qemu/softmmu/ioport.c",
+        "qemu/softmmu/memory.c",
+        "qemu/softmmu/memory_mapping.c",
+        "qemu/fpu/softfloat.c",
+        "qemu/tcg/optimize.c",
+        "qemu/tcg/tcg.c",
+        "qemu/tcg/tcg-op.c",
+        "qemu/tcg/tcg-op-gvec.c",
+        "qemu/tcg/tcg-op-vec.c",
+        "qemu/accel/tcg/cpu-exec.c",
+        "qemu/accel/tcg/cpu-exec-common.c",
+        "qemu/accel/tcg/cputlb.c",
+        "qemu/accel/tcg/tcg-all.c",
+        "qemu/accel/tcg/tcg-runtime.c",
+        "qemu/accel/tcg/tcg-runtime-gvec.c",
+        "qemu/accel/tcg/translate-all.c",
+        "qemu/accel/tcg/translator.c",
+        "qemu/softmmu/unicorn_vtlb.c",
+        "qemu/target/arm/cpu64.c",
+        "qemu/target/arm/cpu.c",
+        "qemu/target/arm/crypto_helper.c",
+        "qemu/target/arm/debug_helper.c",
+        "qemu/target/arm/helper-a64.c",
+        "qemu/target/arm/helper.c",
+        "qemu/target/arm/iwmmxt_helper.c",
+        "qemu/target/arm/m_helper.c",
+        "qemu/target/arm/neon_helper.c",
+        "qemu/target/arm/op_helper.c",
+        "qemu/target/arm/pauth_helper.c",
+        "qemu/target/arm/psci.c",
+        "qemu/target/arm/sve_helper.c",
+        "qemu/target/arm/tlb_helper.c",
+        "qemu/target/arm/translate-a64.c",
+        "qemu/target/arm/translate.c",
+        "qemu/target/arm/translate-sve.c",
+        "qemu/target/arm/vec_helper.c",
+        "qemu/target/arm/vfp_helper.c",
+        "qemu/target/arm/unicorn_aarch64.c",
+    ],
+}
+
+// uc.c + vl.c + cpu.c (the "unicorn" target proper), without the arch libs
+cc_library_static {
+    name: "libunicorn_core",
+    defaults: ["unicorn_defaults"],
+    srcs: [
+        "uc.c",
+        "qemu/softmmu/vl.c",
+        "qemu/hw/core/cpu.c",
+    ],
+    export_include_dirs: ["include"],
+    whole_static_libs: ["libunicorn_aarch64_softmmu", "libunicorn_common"],
+}
+
+// Headers + private headers (uc_priv.h etc.) for armtr's engine glue.
+cc_library_headers {
+    name: "libunicorn_private_headers",
+    export_include_dirs: [
+        "include",
+        "qemu/include",
+        "qemu",
+        "glib_compat",
+    ],
+    export_system_include_dirs: [],
+    host_supported: false,
+}

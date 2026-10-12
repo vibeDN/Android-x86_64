@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// armtr core modules for Soong. This tree is reached as external/armtr (symlink or rsync copy of
+// <repo>/translator, see scripts/sync-translator-to-aosp.sh). The shared library that ART loads,
+// libarmtr_bridge, is defined in device/ours/pc_x86_64/translator/Android.bp.
+// Host unit tests stay CMake (see translator/README.md).
+
+package {
+    default_applicable_licenses: ["armtr_license"],
+}
+
+license {
+    name: "armtr_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["SPDX-license-identifier-GPL-2.0"],
+}
+
+cc_library_headers {
+    name: "libarmtr_headers",
+    export_include_dirs: ["include"],
+    visibility: ["//visibility:public"],
+}
+
+cc_defaults {
+    name: "armtr_defaults",
+    cflags: ["-Wall", "-fvisibility=hidden"],
+    cppflags: ["-std=gnu++17"],
+    header_libs: ["libarmtr_headers"],
+    sanitize: { never: true },
+    lto: { never: true },
+    visibility: ["//visibility:public"],
+}
+
+cc_library_static {
+    name: "libarmtr_engine",
+    defaults: ["armtr_defaults"],
+    srcs: ["engine/engine.cc", "engine/uc_repair.c"],
+    cflags: [
+        "-D_GNU_SOURCE", "-DUNICORN_HAS_ARM64", "-mcx16",
+        "-Wno-unused-parameter", "-Wno-sign-compare", "-Wno-missing-field-initializers",
+    ],
+    header_libs: ["libunicorn_private_headers"],
+    include_dirs: ["device/ours/pc_x86_64/translator/config"], // config-host.h
+    static_libs: ["libunicorn_core"],
+    export_static_lib_headers: ["libunicorn_core"],
+}
+
+cc_library_static {
+    name: "libarmtr_loader",
+    defaults: ["armtr_defaults"],
+    srcs: ["loader/loader.cpp"],
+    local_include_dirs: ["loader/include"],
+    export_include_dirs: ["loader/include"],
+    cppflags: ["-fexceptions"],
+}
+
+cc_library_static {
+    name: "libarmtr_syscalls",
+    defaults: ["armtr_defaults"],
+    srcs: ["syscalls/syscalls.cpp"],
+    local_include_dirs: ["syscalls"],
+    export_include_dirs: ["syscalls"],
+}
+
+cc_library_static {
+    name: "libarmtr_proxy",
+    defaults: ["armtr_defaults"],
+    srcs: ["proxy/proxy_core.cpp", "proxy/proxy_va.cpp", "proxy/proxy_jni.cpp"],
+    local_include_dirs: ["proxy"],
+    export_include_dirs: ["proxy"],
+    header_libs: ["jni_headers"],
+}

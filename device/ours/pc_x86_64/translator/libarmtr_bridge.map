@@ -1,0 +1,1 @@
+LIBARMTR_BRIDGE { global: NativeBridgeItf; local: *; };

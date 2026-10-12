@@ -23,3 +23,10 @@ PRODUCT_COPY_FILES += \
 # Framework config overlay (desktop mode on the internal display)
 PRODUCT_PACKAGES += ours_overlay_desktop
 PRODUCT_PACKAGES += OursLawnchair
+
+# ARM64 -> x86_64 NativeBridge (armtr). Opt-in: needs external/unicorn + external/armtr
+# (scripts/sync-translator-to-aosp.sh). Usage: ARMTR_ENABLE=true m ...
+ARMTR_ENABLE ?= false
+ifeq ($(ARMTR_ENABLE),true)
+PRODUCT_PACKAGES += libarmtr_bridge
+endif

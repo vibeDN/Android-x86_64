@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// NativeBridge shim sources. libarmtr_bridge (device/ours/pc_x86_64/translator/Android.bp) links them
+// together with the armtr modules; this replaces the old libours_nb skeleton.
+
+package {
+    default_applicable_licenses: ["armtr_license"],
+}
+
+filegroup {
+    name: "armtr_bridge_srcs",
+    srcs: ["native_bridge.cc", "engine_stub.c"],
+    visibility: ["//visibility:public"],
+}
+
+cc_library_headers {
+    name: "armtr_bridge_headers",
+    export_include_dirs: ["."],
+    visibility: ["//visibility:public"],
+}

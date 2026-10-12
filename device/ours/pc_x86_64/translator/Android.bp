@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// libarmtr_bridge: the NativeBridge library (ro.dalvik.vm.native.bridge=libarmtr_bridge.so).
+// Needs external/unicorn (fetched + CF_PARALLEL-patched, scripts/fetch-unicorn.sh) and
+// external/armtr (scripts/sync-translator-to-aosp.sh). Only NativeBridgeItf is exported.
+
+package {
+    default_applicable_licenses: ["armtr_license"],
+}
+
+cc_library_shared {
+    name: "libarmtr_bridge",
+    srcs: [":armtr_bridge_srcs"],
+    header_libs: ["libnativebridge-headers", "jni_headers", "liblog_headers", "armtr_bridge_headers"],
+    shared_libs: ["liblog"],
+    static_libs: [
+        "libarmtr_engine",
+        "libarmtr_loader",
+        "libarmtr_syscalls",
+        "libarmtr_proxy",
+        "libunicorn_core",
+    ],
+    cflags: ["-Wall", "-Wextra", "-fvisibility=hidden", "-fexceptions"],
+    version_script: "libarmtr_bridge.map",
+    lto: { never: true },
+    sanitize: { never: true },
+    // system_ext is not needed: libnativebridge dlopens it from the default namespace search path.
+    // Soname must satisfy NativeBridgeNameAcceptable(): [a-zA-Z][a-zA-Z0-9._-]*
+}
