@@ -87,3 +87,17 @@ Findings from reading WMShell (`DesktopDisplayEventHandler`, `DesktopDisplayMode
 - On real PCs without a native GPU driver the display is `simpledrm` (UEFI GOP framebuffer, display id
   `local:0`): `display_settings.xml` has an entry for it. QEMU needs a plain `VGA` device to show that
   framebuffer (virtio-gpu does not).
+
+## UEFI framebuffer path (simpledrm) on Android
+
+Needed for the first boot on any PC without a native GPU driver. Three fixes were required:
+
+1. `simpledrm` only exposes the native framebuffer format, while `drm_hwcomposer` asks for formats with
+   alpha (`ARGB8888`, `ABGR8888`, `XBGR8888`): `patches/kernel/0001-simpledrm-accept-argb8888.patch`
+   accepts them and ignores / swaps channels as needed.
+2. `minigbm` had no backend for `simpledrm` and picked `vkms` (card1) for allocation; buffers allocated on
+   another device cannot be imported by the hwcomposer: `patches/aosp/0005-minigbm-simpledrm-dumb-backend.patch`
+   registers a dumb backend and drops DRM master after opening a card node (the first opener becomes master,
+   and the hwcomposer needs it).
+3. Test display: legacy VGA (`-device VGA`) switches to an 8-bit mode after the kernel starts and shows garbage.
+   Use `ramfb` (plain linear framebuffer, like a UEFI GOP on real hardware) in QEMU.

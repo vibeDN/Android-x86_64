@@ -76,7 +76,7 @@ ${LOADFONTS}set gfxterm_font="Noto Sans Medium 20"
 terminal_output gfxterm
 set theme=/theme/theme.txt
 menuentry "Android (x86_64)" {
-    linux /kernel console=tty0 earlyprintk=efi printk.devkmsg=on audit=1 panic=-1 cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init \
+    linux /kernel console=tty0 8250.nr_uarts=1 earlyprintk=efi printk.devkmsg=on audit=1 panic=-1 cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init \
         androidboot.hardware=cutf_cvm androidboot.fstab_suffix=cf.ext4.cts androidboot.slot_suffix=_a androidboot.verifiedbootstate=orange \
         androidboot.force_normal_boot=1 androidboot.selinux=permissive androidboot.boot_part_uuid=$BOOT_GUID $CMDLINE_EXTRA
     initrd /initrd.img

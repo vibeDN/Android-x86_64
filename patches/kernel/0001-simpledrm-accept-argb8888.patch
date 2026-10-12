@@ -1,0 +1,57 @@
+diff --git a/drivers/gpu/drm/tiny/simpledrm.c b/drivers/gpu/drm/tiny/simpledrm.c
+index 07abaf273..d3ed5bc1f 100644
+--- a/drivers/gpu/drm/tiny/simpledrm.c
++++ b/drivers/gpu/drm/tiny/simpledrm.c
+@@ -647,8 +647,24 @@ static void simpledrm_primary_plane_helper_atomic_update(struct drm_plane *plane
+ 			continue;
+ 
+ 		iosys_map_incr(&dst, drm_fb_clip_offset(sdev->pitch, sdev->format, &dst_clip));
+-		drm_fb_blit(&dst, &sdev->pitch, sdev->format->format, shadow_plane_state->data,
+-			    fb, &damage, &shadow_plane_state->fmtcnv_state);
++		{
++			u32 src_fmt = fb->format->format;
++			u32 dst_fmt = sdev->format->format;
++			bool same_order = (dst_fmt == DRM_FORMAT_XRGB8888 && src_fmt == DRM_FORMAT_ARGB8888) ||
++					  (dst_fmt == DRM_FORMAT_XBGR8888 && (src_fmt == DRM_FORMAT_ABGR8888));
++			bool swapped = (dst_fmt == DRM_FORMAT_XRGB8888 &&
++					(src_fmt == DRM_FORMAT_ABGR8888 || src_fmt == DRM_FORMAT_XBGR8888)) ||
++				       (dst_fmt == DRM_FORMAT_XBGR8888 && src_fmt == DRM_FORMAT_ARGB8888);
++
++			if (same_order)
++				drm_fb_memcpy(&dst, &sdev->pitch, shadow_plane_state->data, fb, &damage);
++			else if (swapped)
++				drm_fb_xrgb8888_to_xbgr8888(&dst, &sdev->pitch, shadow_plane_state->data, fb,
++							    &damage, &shadow_plane_state->fmtcnv_state);
++			else
++				drm_fb_blit(&dst, &sdev->pitch, sdev->format->format, shadow_plane_state->data,
++					    fb, &damage, &shadow_plane_state->fmtcnv_state);
++		}
+ 	}
+ 
+ 	drm_dev_exit(idx);
+@@ -951,6 +967,25 @@ static struct simpledrm_device *simpledrm_device_create(struct drm_driver *drv,
+ 
+ 	nformats = drm_fb_build_fourcc_list(dev, &format->format, 1,
+ 					    sdev->formats, ARRAY_SIZE(sdev->formats));
++	/*
++	 * Android's drm_hwcomposer scans out buffers with an alpha channel (ARGB8888 / ABGR8888 /
++	 * XBGR8888). The framebuffer has none, so accept them and ignore the alpha byte.
++	 */
++	if (format->format == DRM_FORMAT_XRGB8888 || format->format == DRM_FORMAT_XBGR8888) {
++		static const u32 extra[] = { DRM_FORMAT_ARGB8888, DRM_FORMAT_ABGR8888,
++					     DRM_FORMAT_XBGR8888 };
++		size_t e, k;
++
++		for (e = 0; e < ARRAY_SIZE(extra); e++) {
++			if (extra[e] == format->format)
++				continue;
++			for (k = 0; k < nformats; k++)
++				if (sdev->formats[k] == extra[e])
++					break;
++			if (k == nformats && nformats < ARRAY_SIZE(sdev->formats))
++				sdev->formats[nformats++] = extra[e];
++		}
++	}
+ 
+ 	primary_plane = &sdev->primary_plane;
+ 	ret = drm_universal_plane_init(dev, primary_plane, 0, &simpledrm_primary_plane_funcs,
