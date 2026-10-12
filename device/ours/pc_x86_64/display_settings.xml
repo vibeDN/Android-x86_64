@@ -2,5 +2,5 @@
 <!-- Desktop OS: the internal display runs in freeform (windowed) mode by default. -->
 <display-settings>
     <config identifier="0" />
-    <display name="local:4632256312697818880" windowingMode="5" />
+    <display name="local:4632256312697818880" windowingMode="5" ignoreOrientationRequest="true" />
 </display-settings>

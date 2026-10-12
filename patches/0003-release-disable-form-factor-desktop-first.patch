@@ -1,0 +1,12 @@
+diff --git a/aconfig/trunk_staging/com.android.window.flags/form_factor_based_desktop_first_switch_flag_values.textproto b/aconfig/trunk_staging/com.android.window.flags/form_factor_based_desktop_first_switch_flag_values.textproto
+index cbf9afd..d610722 100644
+--- a/aconfig/trunk_staging/com.android.window.flags/form_factor_based_desktop_first_switch_flag_values.textproto
++++ b/aconfig/trunk_staging/com.android.window.flags/form_factor_based_desktop_first_switch_flag_values.textproto
+@@ -1,6 +1,6 @@
+ flag_value {
+   package: "com.android.window.flags"
+   name: "form_factor_based_desktop_first_switch"
+-  state: ENABLED
++  state: DISABLED
+   permission: READ_WRITE
+ }

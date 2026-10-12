@@ -3,4 +3,6 @@
     <bool name="config_isDesktopModeSupported">true</bool>
     <bool name="config_canInternalDisplayHostDesktops">true</bool>
     <bool name="config_isDesktopModeDevOptionSupported">true</bool>
+    <!-- Desktop OS: no lock screen unless the user sets a credential -->
+    <bool name="config_disableLockscreenByDefault">true</bool>
 </resources>

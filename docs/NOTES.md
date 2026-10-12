@@ -50,3 +50,20 @@ Findings from bringing AOSP 16 up on x86_64 without the `cuttlefish-common` host
 - 15 GB RAM is tight: use `-j4`, a large swap, and `scripts/build/memguard.sh` (pauses `ninja` when
   `MemAvailable` drops below ~800 MB). R8 jobs and the Soong analysis step peak at 10+ GB.
 - `dd conv=sparse` over an existing disk leaves stale blocks: punch holes first (`fallocate -p`).
+
+## Desktop-first on a single internal display (Android 16)
+
+Findings from reading WMShell (`DesktopDisplayEventHandler`, `DesktopDisplayModeController`):
+
+- With the multiple-desks backend, the default desk of the internal display is created only while the
+  keyguard is not locked ("handled on unlock" only covers non-default displays). A desktop product
+  should not show a lock screen unless a credential is set: `config_disableLockscreenByDefault=true`.
+- `getTargetWindowingModeForDefaultDisplay()` switches the display to touch-first (fullscreen) unless a
+  physical keyboard **and a touchpad** are connected (flag `form_factor_based_desktop_first_switch`).
+  A plain USB mouse is not a touchpad, so for a PC product the flag is disabled
+  (`patches/0003-release-disable-form-factor-desktop-first.patch`) and the display keeps the freeform mode
+  from `display_settings.xml`.
+- `ignoreOrientationRequest="true"` (taken from the Cuttlefish foldable product) lets windows keep their
+  shape when an app asks for a fixed orientation.
+- The Cuttlefish foldable product itself only adds hinge/lid device states and a two-display layout
+  (emulated by host-side daemons); it does not enable desktop windowing.
