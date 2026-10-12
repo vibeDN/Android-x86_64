@@ -1,0 +1,66 @@
+title-text: ""
+desktop-image: "background.png"
+desktop-image-scale-method: "crop"
+desktop-color: "#07140f"
+terminal-font: "Noto Sans Medium 20"
+
++ label {
+    top = 11%
+    left = 0
+    width = 100%
+    align = "center"
+    font = "Noto Sans Bold 76"
+    color = "#e6f4ee"
+    text = "Android"
+}
+
++ label {
+    top = 23%
+    left = 0
+    width = 100%
+    align = "center"
+    font = "Noto Sans Medium 30"
+    color = "#8fd9bf"
+    text = "Эстетика · Свобода · Android"
+}
+
++ boot_menu {
+    top = 42%
+    width = 30%
+    left = 35%
+    height = 120
+    item_font = "Noto Sans Medium 26"
+    item_color = "#b7d8cc"
+    selected_item_color = "#ffffff"
+    item_height = 62
+    item_padding = 26
+    item_spacing = 14
+    icon_width = 0
+    icon_height = 0
+    item_icon_space = 0
+    selected_item_pixmap_style = "select_*.png"
+    scrollbar = false
+}
+
++ progress_bar {
+    id = "__timeout__"
+    left = 38%
+    top = 64%
+    width = 24%
+    height = 8
+    show_text = false
+    fg_color = "#7fd6b8"
+    bg_color = "#14302a"
+    border_color = "#14302a"
+    text_color = "#14302a"
+}
+
++ label {
+    top = 93%
+    left = 0
+    width = 100%
+    align = "center"
+    font = "Noto Sans Medium 20"
+    color = "#5f8f80"
+    text = "стрелки — выбор     Enter — запуск     e — параметры     c — консоль"
+}

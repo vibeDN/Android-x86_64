@@ -3,4 +3,6 @@
 <display-settings>
     <config identifier="0" />
     <display name="local:4632256312697818880" windowingMode="5" ignoreOrientationRequest="true" />
+    <!-- simpledrm / UEFI framebuffer (real PCs without a native GPU driver) -->
+    <display name="local:0" windowingMode="5" ignoreOrientationRequest="true" />
 </display-settings>
