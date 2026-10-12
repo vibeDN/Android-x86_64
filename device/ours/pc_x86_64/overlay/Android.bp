@@ -1,0 +1,5 @@
+runtime_resource_overlay {
+    name: "ours_overlay_desktop",
+    soc_specific: true,
+    sdk_version: "current",
+}

@@ -1,0 +1,1 @@
+androidboot.vsock_lights_port=6900 androidboot.vsock_camera_port=6901 androidboot.vsock_tombstone_port=6902

@@ -1,0 +1,12 @@
+diff --git a/shared/device.mk b/shared/device.mk
+index b31638a..72cd430 100644
+--- a/shared/device.mk
++++ b/shared/device.mk
+@@ -360,7 +360,6 @@ PRODUCT_PACKAGES += $(LOCAL_DUMPSTATE_PRODUCT_PACKAGE)
+ # Gatekeeper
+ #
+ PRODUCT_PACKAGES += \
+-  com.android.hardware.gatekeeper.cf_remote \
+   com.android.hardware.gatekeeper.nonsecure \
+ 
+ #

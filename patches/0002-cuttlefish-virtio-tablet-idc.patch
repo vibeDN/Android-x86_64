@@ -1,0 +1,44 @@
+diff --git a/shared/config/input/Android.bp b/shared/config/input/Android.bp
+index 8076c52..699d0fe 100644
+--- a/shared/config/input/Android.bp
++++ b/shared/config/input/Android.bp
+@@ -35,6 +35,7 @@ apex {
+         "Cuttlefish_Vhost_User_Multitouch_Touchscreen_2.idc",
+         "Cuttlefish_Vhost_User_Multitouch_Touchscreen_3.idc",
+         "Cuttlefish_Vhost_User_Rotary_0.idc",
++        "QEMU_Virtio_Tablet.idc",
+     ],
+ }
+ 
+@@ -86,3 +87,9 @@ prebuilt_etc {
+     src: "Cuttlefish_Vhost_User_Rotary_0.idc",
+     defaults: ["crosvm_idc_defaults"],
+ }
++
++prebuilt_etc {
++    name: "QEMU_Virtio_Tablet.idc",
++    src: "QEMU_Virtio_Tablet.idc",
++    defaults: ["crosvm_idc_defaults"],
++}
+diff --git a/shared/config/input/QEMU_Virtio_Tablet.idc b/shared/config/input/QEMU_Virtio_Tablet.idc
+new file mode 100644
+index 0000000..9525a8e
+--- /dev/null
++++ b/shared/config/input/QEMU_Virtio_Tablet.idc
+@@ -0,0 +1,4 @@
++# QEMU virtio tablet (absolute pointer) used for desktop testing:
++# treat it as a mouse pointer, not as a touchscreen.
++device.internal = 0
++touch.deviceType = pointer
+diff --git a/shared/device.mk b/shared/device.mk
+index b31638a..72cd430 100644
+--- a/shared/device.mk
++++ b/shared/device.mk
+@@ -360,7 +360,6 @@ PRODUCT_PACKAGES += $(LOCAL_DUMPSTATE_PRODUCT_PACKAGE)
+ # Gatekeeper
+ #
+ PRODUCT_PACKAGES += \
+-  com.android.hardware.gatekeeper.cf_remote \
+   com.android.hardware.gatekeeper.nonsecure \
+ 
+ #

@@ -1,0 +1,52 @@
+# Engineering notes
+
+Findings from bringing AOSP 16 up on x86_64 without the `cuttlefish-common` host packages.
+
+## Booting the images in QEMU
+
+- QEMU + KVM, kernel from `boot.img`, initrd = vendor ramdisk + `init_boot` ramdisk (concatenated).
+- GPT disk with: `misc`, `vbmeta_a`, `vbmeta_system_a`, `vbmeta_vendor_dlkm_a`, `vbmeta_system_dlkm_a`,
+  `metadata`, `super`, `userdata`, `boot_a`, `init_boot_a`, `vendor_boot_a`, **`frp`** (required:
+  without it `PersistentDataBlockService` kills `system_server`).
+- Kernel command line (see `scripts/qemu/run-qemu.sh` and the `*-args.txt` files):
+  `androidboot.force_normal_boot=1` (otherwise it boots recovery), `androidboot.hardware=cutf_cvm`,
+  `androidboot.fstab_suffix=cf.ext4.cts`, `androidboot.slot_suffix=_a`,
+  `androidboot.boot_devices=pci0000:00/0000:00:12.0`, graphics (`gralloc=minigbm`,
+  `hwcomposer=drm`, `egl=angle`, `vulkan=pastel`, `lcd_density=160`), vsock ports for the lights /
+  camera / tombstone HALs, `androidboot.vendor.apex.*` to pick one APEX of each duplicated HAL pair.
+- Devices: virtio-blk (slot 0x12), virtio-gpu, virtio-keyboard, **virtio-mouse** (relative; the
+  virtio tablet sends `BTN_MOUSE`, which Android ignores for touch devices), virtio-rng, vhost-vsock,
+  virtio-serial with 11 consoles (`hvc2` = logcat, `hvc10` = oemlock HAL port).
+- Serial console to a unix socket gives a `shell` prompt (`su 0` works on userdebug). QMP gives
+  input injection and `screendump` (the hardware cursor is not part of the screendump).
+
+## Kernel
+
+- ACK `android16-6.12`. `ashmem` exists only as a Rust driver in 6.12, so `CONFIG_RUST=y` is needed.
+  Build with the AOSP prebuilts (`prebuilts/rust/linux-x86/<ver>`, `prebuilts/clang-tools/.../bindgen`)
+  and pass `RUSTC`, `HOSTRUSTC`, `BINDGEN`, `RUST_LIB_SRC` as make arguments.
+- Modules in `vendor_dlkm` / `system_dlkm` must match the kernel exactly (vermagic + symbol CRCs),
+  otherwise `dlkm_loader` aborts and `mediaswcodec` crashes (no dma-buf `system_heap`).
+  `BoardConfig.mk` takes `SYSTEM_DLKM_SRC` and `KERNEL_MODULES_PATH` with `?=`, so point them at
+  directories of your own modules and rebuild only the images.
+
+## Product
+
+- `device/ours/pc_x86_64/ours_cf_x86_64_phone.mk` inherits the Cuttlefish phone product.
+- Device properties must go to `PRODUCT_PRODUCT_PROPERTIES` / vendor (not `system`: the GSI check fails).
+- Desktop windowing needs: `persist.wm.debug.desktop_experience_devopts=true`,
+  `persist.wm.debug.desktop_mode_enforce_device_restrictions=false`, the framework RRO
+  (`config_isDesktopModeSupported`, `config_canInternalDisplayHostDesktops`,
+  `config_isDesktopModeDevOptionSupported`), `android.software.freeform_window_management`,
+  `android.hardware.type.pc`, a display of at least 600dp smallest width (160 dpi at 1280x800), and a
+  freeform default for the display (`display_settings.xml` entry with `windowingMode="5"`).
+- `wm shell desktopmode moveTaskToDesk` crashes SystemUI on this setup; launch with
+  `am start --windowingMode 5` or set the display windowing mode instead.
+- Cuttlefish-only HALs can be dropped with `CF_VENDOR_NO_UWB=true`, `CF_VENDOR_NO_THREADNETWORK=true`,
+  `LOCAL_ENABLE_OEMLOCK=false`.
+
+## Build machine notes
+
+- 15 GB RAM is tight: use `-j4`, a large swap, and `scripts/build/memguard.sh` (pauses `ninja` when
+  `MemAvailable` drops below ~800 MB). R8 jobs and the Soong analysis step peak at 10+ GB.
+- `dd conv=sparse` over an existing disk leaves stale blocks: punch holes first (`fallocate -p`).
