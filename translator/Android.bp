@@ -10,19 +10,21 @@ package {
 
 license {
     name: "armtr_license",
-    visibility: [":__subpackages__"],
+    visibility: ["//visibility:public"],
     license_kinds: ["SPDX-license-identifier-GPL-2.0"],
 }
 
 cc_library_headers {
     name: "libarmtr_headers",
+    host_supported: false,
     export_include_dirs: ["include"],
     visibility: ["//visibility:public"],
 }
 
 cc_defaults {
     name: "armtr_defaults",
-    cflags: ["-Wall", "-fvisibility=hidden"],
+    compile_multilib: "64",
+    cflags: ["-Wall", "-Wno-error", "-fvisibility=hidden"],
     cppflags: ["-std=gnu++17"],
     header_libs: ["libarmtr_headers"],
     sanitize: { never: true },

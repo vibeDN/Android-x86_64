@@ -9,17 +9,21 @@ package {
 
 cc_library_shared {
     name: "libarmtr_bridge",
+    compile_multilib: "64",
     srcs: [":armtr_bridge_srcs"],
-    header_libs: ["libnativebridge-headers", "jni_headers", "liblog_headers", "armtr_bridge_headers"],
+    header_libs: ["jni_headers", "liblog_headers", "armtr_bridge_headers"],
     shared_libs: ["liblog"],
-    static_libs: [
+    // whole archive: nothing in the M0 bridge calls the engine yet, but the .so must carry it.
+    // Visibility: the version script (local: *) hides everything but NativeBridgeItf, so no
+    // -fvisibility=hidden here (it would also hide NativeBridgeItf).
+    whole_static_libs: [
         "libarmtr_engine",
         "libarmtr_loader",
         "libarmtr_syscalls",
         "libarmtr_proxy",
         "libunicorn_core",
     ],
-    cflags: ["-Wall", "-Wextra", "-fvisibility=hidden", "-fexceptions"],
+    cflags: ["-Wall", "-Wextra", "-Wno-error", "-fexceptions"],
     version_script: "libarmtr_bridge.map",
     lto: { never: true },
     sanitize: { never: true },

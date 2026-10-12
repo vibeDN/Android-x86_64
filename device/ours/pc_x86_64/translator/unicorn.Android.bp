@@ -20,8 +20,10 @@ license {
 cc_defaults {
     name: "unicorn_defaults",
     host_supported: false,
+    compile_multilib: "64",
     cflags: [
-        "-Wno-everything",
+        "-Wno-error",
+        "-Wno-initializer-overrides",
         "-fPIC",
         "-fvisibility=hidden",
         "-mcx16",

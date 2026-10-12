@@ -1,0 +1,5 @@
+ANDROID: AImageDecoderFrameInfo_getFrameRect: struct by value
+ANDROID: AImageDecoder_setCrop: param 1: struct by value
+ANDROID: AThermal_registerThermalHeadroomListener: param 1: callback not int-class
+ANDROID: AThermal_unregisterThermalHeadroomListener: param 1: callback not int-class
+SLES: SL_IID_NULL has no interface struct (IID data symbol kept, interface not wrapped)
