@@ -10,7 +10,8 @@ Design: `docs/translator/00..05` (05 = the NativeBridge as built). Modules: engi
 - Berberis (Apache-2.0) is read as a design reference only; no code is copied.
 
 ## Fetch Unicorn (required for both builds)
-    scripts/fetch-unicorn.sh      # clones tag 2.1.4, applies the REQUIRED CF_PARALLEL patch, builds it (host)
+    scripts/fetch-unicorn.sh      # clones tag 2.1.4, applies the REQUIRED CF_PARALLEL patch and
+                                  # scripts/unicorn-armtr-perf.patch (docs 06, also required: the engine sets its fields), builds it (host)
 
 ## Build 1: host (CMake, unit tests)
     cmake -S translator/engine -B /mnt/storage-adata/tmp/engine-build && cmake --build /mnt/storage-adata/tmp/engine-build -j2

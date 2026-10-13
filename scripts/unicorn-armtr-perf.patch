@@ -1,0 +1,325 @@
+diff --git a/include/uc_priv.h b/include/uc_priv.h
+index c3132dc..f6cf4e8 100644
+--- a/include/uc_priv.h
++++ b/include/uc_priv.h
+@@ -413,6 +413,12 @@ struct uc_struct {
+     bool no_exit_request; // Disable check_exit_request temporarily. A
+                           // workaround to treat the IT block as a whole block.
+     bool init_done;       // Whether the initialization is done.
++    // armtr: guest loads/stores access host memory at the guest address directly (no softmmu TLB, like
++    // linux-user with guest_base 0); faults arrive as host SIGSEGV. Stores then bypass the notdirty SMC
++    // tracking, so IC IVAU (the architected way to publish new code) calls armtr_ic_ivau.
++    bool armtr_direct_mem;
++    uint64_t armtr_cached_exit; // armtr: exit whose (exit-halting) TB is still cached, 0 = none
++    void (*armtr_ic_ivau)(struct uc_struct *uc, uint64_t vaddr);
+ 
+     sigjmp_buf jmp_bufs[UC_MAX_NESTED_LEVEL]; // To support nested uc_emu_start
+     int nested_level;                         // Current nested_level
+diff --git a/qemu/accel/tcg/cputlb.c b/qemu/accel/tcg/cputlb.c
+index 3d0bebd..73e26ad 100644
+--- a/qemu/accel/tcg/cputlb.c
++++ b/qemu/accel/tcg/cputlb.c
+@@ -874,7 +874,7 @@ void tlb_set_page_with_attrs(CPUState *cpu, target_ulong vaddr,
+         if (prot & PAGE_WRITE) {
+             if (section->readonly) {
+                 write_address |= TLB_DISCARD_WRITE;
+-            } else if (cpu_physical_memory_is_clean(iotlb)) {
++            } else if (tb_page_has_code(cpu->uc, iotlb)) {
+                 write_address |= TLB_NOTDIRTY;
+             }
+         }
+@@ -1209,7 +1209,7 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
+     // - or doing snapshot
+     // , then never clean the tlb
+     if (!(!mr || (tlbe->addr_write != -1 && mr->priority < cpu->uc->snapshot_level)) &&
+-            !(tlbe->addr_code != -1) &&
++            !tb_page_has_code(cpu->uc, ram_addr) &&
+             !uc_mem_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {
+         tlb_set_dirty(cpu, mem_vaddr);
+     }
+@@ -1430,6 +1430,11 @@ static void *atomic_mmu_lookup(CPUArchState *env, target_ulong addr,
+         goto stop_the_world;
+     }
+ 
++    /* armtr: direct memory mode, guest VA == host VA (tag stripped); a bad page faults on the host. */
++    if (uc->armtr_direct_mem) {
++        return (void *)(uintptr_t)(((int64_t)addr << 8) >> 8);
++    }
++
+     /* Check TLB entry and enforce page permissions.  */
+     if (!tlb_hit(env->uc, tlb_addr, addr)) {
+         if (!VICTIM_TLB_HIT(addr_write, addr)) {
+diff --git a/qemu/accel/tcg/translate-all.c b/qemu/accel/tcg/translate-all.c
+index 71b6b2b..1286018 100644
+--- a/qemu/accel/tcg/translate-all.c
++++ b/qemu/accel/tcg/translate-all.c
+@@ -1838,8 +1838,9 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
+         phys_page2 = get_page_addr_code(env, virt_page2);
+     }
+ 
+-    /* Undoes tlb_set_dirty in notdirty_write. */
+-    if (!uc_mem_hook_installed(cpu->uc, tb->pc)) {
++    /* Undoes tlb_set_dirty in notdirty_write (armtr: also with mem hooks, else SMC goes unnoticed; not in
++       direct memory mode, where guest stores bypass the TLB and IC IVAU publishes new code). */
++    if (!cpu->uc->armtr_direct_mem) {
+         tlb_reset_dirty_by_vaddr(cpu, pc & TARGET_PAGE_MASK,
+                                 (pc & ~TARGET_PAGE_MASK) + tb->size);
+     }
+@@ -2050,6 +2051,12 @@ void tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *
+     }
+ }
+ 
++bool tb_page_has_code(struct uc_struct *uc, tb_page_addr_t addr)
++{
++    PageDesc *p = page_find(uc, addr >> TARGET_PAGE_BITS);
++    return p && p->first_tb;
++}
++
+ /* user-mode: call with mmap_lock held */
+ void tb_check_watchpoint(CPUState *cpu, uintptr_t retaddr)
+ {
+diff --git a/qemu/accel/tcg/translate-all.h b/qemu/accel/tcg/translate-all.h
+index 30ce55d..8105d58 100644
+--- a/qemu/accel/tcg/translate-all.h
++++ b/qemu/accel/tcg/translate-all.h
+@@ -32,5 +32,7 @@ void tb_invalidate_phys_page_fast(struct uc_struct *uc, struct page_collection *
+ void tb_invalidate_phys_page_range(struct uc_struct *uc, tb_page_addr_t start, tb_page_addr_t end);
+ void tb_invalidate_phys_range(struct uc_struct *uc, ram_addr_t start, ram_addr_t end);
+ void tb_check_watchpoint(CPUState *cpu, uintptr_t retaddr);
++/* armtr: true if translated code exists for this ram page (Unicorn stubs the dirty bitmap). */
++bool tb_page_has_code(struct uc_struct *uc, tb_page_addr_t addr);
+ 
+ #endif /* TRANSLATE_ALL_H */
+diff --git a/qemu/include/exec/gen-icount.h b/qemu/include/exec/gen-icount.h
+index 8b484cb..81b51c5 100644
+--- a/qemu/include/exec/gen-icount.h
++++ b/qemu/include/exec/gen-icount.h
+@@ -32,6 +32,16 @@ static inline void gen_io_end(TCGContext *tcg_ctx)
+ 
+ static inline void gen_tb_start(TCGContext *tcg_ctx, TranslationBlock *tb)
+ {
++    /* armtr: upstream QEMU's inline icount_decr test instead of a helper call per TB (cpu_exit() sets it). */
++    if (tcg_ctx->delay_slot_flag == NULL && !HOOK_EXISTS(tcg_ctx->uc, UC_HOOK_BLOCK)) {
++        TCGv_i32 count = tcg_temp_new_i32(tcg_ctx);
++        tcg_gen_ld_i32(tcg_ctx, count, tcg_ctx->cpu_env,
++                       offsetof(ArchCPU, neg.icount_decr.u32) - offsetof(ArchCPU, env));
++        tcg_ctx->exitreq_label = gen_new_label(tcg_ctx);
++        tcg_gen_brcondi_i32(tcg_ctx, TCG_COND_LT, count, 0, tcg_ctx->exitreq_label);
++        tcg_temp_free_i32(tcg_ctx, count);
++        return;
++    }
+     TCGv_ptr puc = tcg_const_ptr(tcg_ctx, tcg_ctx->uc);
+     TCGv_i32 tmp = tcg_const_i32(tcg_ctx, 0);
+     // Unicorn:
+@@ -57,6 +67,10 @@ static inline void gen_tb_end(TCGContext *tcg_ctx, TranslationBlock *tb, int num
+         tcg_set_insn_param(tcg_ctx->icount_start_insn, 1, num_insns);
+     }
+ 
++    if (tcg_ctx->exitreq_label) {
++        gen_set_label(tcg_ctx, tcg_ctx->exitreq_label);
++        tcg_ctx->exitreq_label = NULL;
++    }
+     tcg_gen_exit_tb(tcg_ctx, tb, TB_EXIT_REQUESTED);
+ }
+ 
+diff --git a/qemu/include/tcg/tcg.h b/qemu/include/tcg/tcg.h
+index bbeb4b9..5726adc 100644
+--- a/qemu/include/tcg/tcg.h
++++ b/qemu/include/tcg/tcg.h
+@@ -672,6 +672,7 @@ struct TCGContext {
+ #endif
+ 
+     TCGv_i32 delay_slot_flag;
++    TCGLabel *exitreq_label;  /* armtr: inline TB-start exit check */
+ 
+     TCGTempSet free_temps[TCG_TYPE_COUNT * 2];
+     TCGTemp temps[TCG_MAX_TEMPS]; /* globals first, temps after */
+diff --git a/qemu/softmmu/cpus.c b/qemu/softmmu/cpus.c
+index afb8bbe..357ada7 100644
+--- a/qemu/softmmu/cpus.c
++++ b/qemu/softmmu/cpus.c
+@@ -223,8 +223,12 @@ void resume_all_vcpus(struct uc_struct* uc)
+     // if we dont do this, next time we cannot emulate at that address
+     if (uc->use_exits) {
+         g_tree_foreach(uc->ctl_exits, uc_exit_invalidate_iter, (void*)uc);
+-    } else {
++    } else if (uc->nested_level > 1) {
+         uc_exit_invalidate_iter((gpointer)&uc->exits[uc->nested_level - 1], NULL, (gpointer)uc);
++    } else {
++        /* armtr: keep the outermost run's exit TB (re-translating it cost ~1 us per uc_emu_start);
++           uc_emu_start drops it as soon as a run uses a different exit. */
++        uc->armtr_cached_exit = uc->exits[0];
+     }
+ 
+     cpu->created = false;
+diff --git a/qemu/softmmu/unicorn_vtlb.c b/qemu/softmmu/unicorn_vtlb.c
+index 25c6840..30cd4d1 100644
+--- a/qemu/softmmu/unicorn_vtlb.c
++++ b/qemu/softmmu/unicorn_vtlb.c
+@@ -55,7 +55,7 @@ bool unicorn_fill_tlb(CPUState *cs, vaddr address, int size,
+     struct hook *hook;
+     HOOK_FOREACH_VAR_DECLARE;
+ 
+-    cpu_restore_state(cs, retaddr, false);
++    /* armtr: no cpu_restore_state() here (a TB search per TLB miss); tlb_miss below still restores it. */
+ 
+     HOOK_FOREACH(uc, hook, UC_HOOK_TLB_FILL) {
+         if (hook->to_delete) {
+diff --git a/qemu/target/arm/helper-a64.c b/qemu/target/arm/helper-a64.c
+index 12da114..39f7004 100644
+--- a/qemu/target/arm/helper-a64.c
++++ b/qemu/target/arm/helper-a64.c
+@@ -1117,6 +1117,11 @@ void HELPER(dc_zva)(CPUARMState *env, uint64_t vaddr_in)
+ 
+     assert(maxidx <= ARRAY_SIZE(hostaddr));
+ 
++    if (uc->armtr_direct_mem) {  /* armtr: guest VA == host VA (vaddr_in is TBI-clean) */
++        memset((void *)(uintptr_t)vaddr, 0, blocklen);
++        return;
++    }
++
+     for (try = 0; try < 2; try++) {
+ 
+         for (i = 0; i < maxidx; i++) {
+diff --git a/qemu/target/arm/helper.c b/qemu/target/arm/helper.c
+index 60c9db9..682b304 100644
+--- a/qemu/target/arm/helper.c
++++ b/qemu/target/arm/helper.c
+@@ -4162,6 +4162,14 @@ static void tlbi_aa64_vae1is_write(CPUARMState *env, const ARMCPRegInfo *ri,
+     tlb_flush_page_by_mmuidx_all_cpus_synced(cs, pageaddr, mask);
+ }
+ 
++static void ic_ivau_write(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
++{
++    struct uc_struct *uc = env->uc;
++    if (uc->armtr_ic_ivau) {
++        uc->armtr_ic_ivau(uc, value);
++    }
++}
++
+ static void tlbi_aa64_vae1_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                                  uint64_t value)
+ {
+@@ -4397,7 +4405,7 @@ static const ARMCPRegInfo v8_cp_reginfo[] = {
+       .accessfn = aa64_cacheop_pou_access },
+     { .name = "IC_IVAU", .state = ARM_CP_STATE_AA64,
+       .opc0 = 1, .opc1 = 3, .crn = 7, .crm = 5, .opc2 = 1,
+-      .access = PL0_W, .type = ARM_CP_NOP,
++      .access = PL0_W, .type = ARM_CP_NO_RAW, .writefn = ic_ivau_write,
+       .accessfn = aa64_cacheop_pou_access },
+     { .name = "DC_IVAC", .state = ARM_CP_STATE_AA64,
+       .opc0 = 1, .opc1 = 0, .crn = 7, .crm = 6, .opc2 = 1,
+diff --git a/qemu/target/arm/translate-a64.c b/qemu/target/arm/translate-a64.c
+index 9229765..9555105 100644
+--- a/qemu/target/arm/translate-a64.c
++++ b/qemu/target/arm/translate-a64.c
+@@ -231,8 +231,13 @@ static TCGv_i64 clean_data_tbi(DisasContext *s, TCGv_i64 addr)
+      * including the TBI.  In system mode we can make this work via
+      * the TLB, dropping the TBI during translation.  But for user-only
+      * mode we don't have that option, and must remove the top byte now.
++     * armtr: direct memory mode bypasses the TLB, so strip it here like user-only mode does.
+      */
+-    tcg_gen_mov_i64(tcg_ctx, clean, addr);
++    if (s->uc->armtr_direct_mem) {
++        gen_top_byte_ignore(s, clean, addr, s->tbid);
++    } else {
++        tcg_gen_mov_i64(tcg_ctx, clean, addr);
++    }
+     return clean;
+ }
+ 
+@@ -326,8 +331,10 @@ static inline bool use_goto_tb(DisasContext *s, int n, uint64_t dest)
+         return false;
+     }
+ 
+-    /* Only link tbs from inside the same guest page */
+-    if ((s->base.tb->pc & TARGET_PAGE_MASK) != (dest & TARGET_PAGE_MASK)) {
++    /* Only link tbs from inside the same guest page (armtr: guest VA == host VA never changes, and invalidating
++       a TB unlinks its incoming jumps, so link across pages like linux-user does) */
++    if (!uc->armtr_direct_mem &&
++        (s->base.tb->pc & TARGET_PAGE_MASK) != (dest & TARGET_PAGE_MASK)) {
+         return false;
+     }
+ 
+@@ -1867,7 +1874,8 @@ static void handle_sys(DisasContext *s, uint32_t insn, bool isread,
+         return;
+     }
+ 
+-    if (ri->accessfn) {
++    /* armtr: aa64_zva_access only matters at EL0 (SCTLR_EL1.DZE); our guest runs at EL1. */
++    if (ri->accessfn && !(uc->armtr_direct_mem && ri->type == ARM_CP_DC_ZVA)) {
+         /* Emit code to perform further access permissions checks at
+          * runtime; this may result in an exception.
+          */
+diff --git a/qemu/tcg/i386/tcg-target.inc.c b/qemu/tcg/i386/tcg-target.inc.c
+index 15cc1c0..e821204 100644
+--- a/qemu/tcg/i386/tcg-target.inc.c
++++ b/qemu/tcg/i386/tcg-target.inc.c
+@@ -2093,6 +2093,10 @@ static void tcg_out_qemu_ld(TCGContext *s, const TCGArg *args, bool is64)
+ 
+     mem_index = get_mmuidx(oi);
+ 
++    if (s->uc->armtr_direct_mem) {
++        tcg_out_qemu_ld_direct(s, datalo, datahi, addrlo, -1, 0, 0, is64, opc);
++        return;
++    }
+     tcg_out_tlb_load(s, addrlo, addrhi, mem_index, opc,
+                      label_ptr, offsetof(CPUTLBEntry, addr_read));
+ 
+@@ -2203,6 +2207,10 @@ static void tcg_out_qemu_st(TCGContext *s, const TCGArg *args, bool is64)
+ 
+     mem_index = get_mmuidx(oi);
+ 
++    if (s->uc->armtr_direct_mem) {
++        tcg_out_qemu_st_direct(s, datalo, datahi, addrlo, -1, 0, 0, opc);
++        return;
++    }
+     tcg_out_tlb_load(s, addrlo, addrhi, mem_index, opc,
+                      label_ptr, offsetof(CPUTLBEntry, addr_write));
+ 
+diff --git a/qemu/util/crc32c.c b/qemu/util/crc32c.c
+index e811d4d..d28d77e 100644
+--- a/qemu/util/crc32c.c
++++ b/qemu/util/crc32c.c
+@@ -105,8 +105,26 @@ static const uint32_t crc32c_table[256] = {
+ };
+ 
+ 
++#if defined(__x86_64__)
++#include <nmmintrin.h>
++/* armtr: the SSE4.2 crc32 insn is CRC-32C (bionic's scudo checksums every chunk header with crc32cx). */
++__attribute__((target("sse4.2")))
++static uint32_t crc32c_sse42(uint32_t crc, const uint8_t *data, unsigned int length)
++{
++    while (length--) {
++        crc = _mm_crc32_u8(crc, *data++);
++    }
++    return crc ^ 0xffffffff;
++}
++#endif
++
+ uint32_t crc32c(uint32_t crc, const uint8_t *data, unsigned int length)
+ {
++#if defined(__x86_64__)
++    if (__builtin_cpu_supports("sse4.2")) {
++        return crc32c_sse42(crc, data, length);
++    }
++#endif
+     while (length--) {
+         crc = crc32c_table[(crc ^ *data++) & 0xFFL] ^ (crc >> 8);
+     }
+diff --git a/uc.c b/uc.c
+index 75b89a0..3b0f9d6 100644
+--- a/uc.c
++++ b/uc.c
+@@ -1219,6 +1219,10 @@ uc_err uc_emu_start(uc_engine *uc, uint64_t begin, uint64_t until,
+     // effect. This is designed for the backward compatibility.
+     if (!uc->use_exits) {
+         uc->exits[uc->nested_level - 1] = until;
++        if (uc->armtr_cached_exit && uc->armtr_cached_exit != until) {
++            uc->uc_invalidate_tb(uc, uc->armtr_cached_exit - 1, 1);  /* as uc_exit_invalidate_iter */
++        }
++        uc->armtr_cached_exit = 0;
+     }
+ 
+     if (timeout) {

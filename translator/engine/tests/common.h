@@ -7,7 +7,7 @@
 #include <time.h>
 #include "armtr/engine.h"
 
-enum { F_ADD, F_SUM8, F_SVC, F_TRAMP, F_NEON, F_SUMARR, F_LOAD, F_STORE, F_SPIN, F_ATOMIC, F_TLS, F_FP, F_NEST };
+enum { F_ADD, F_SUM8, F_SVC, F_TRAMP, F_NEON, F_SUMARR, F_LOAD, F_STORE, F_SPIN, F_ATOMIC, F_TLS, F_FP, F_NEST, F_STORE_CODE };
 
 static inline double now() { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 

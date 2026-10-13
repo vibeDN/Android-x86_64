@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
-set(UNICORN_DIR "/mnt/storage-adata/translator-research/unicorn" CACHE PATH "Unicorn 2.1.4 tree (src/ + build/)")
+set(UNICORN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party-build/unicorn CACHE PATH "Unicorn tree from scripts/fetch-unicorn.sh (src/ + build/)")
 set(ARMTR_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
 add_library(armtr_engine_obj OBJECT engine.cc uc_repair.c)

@@ -61,5 +61,6 @@ fork/exec of guest images, proxy/JNIEnv wiring (jni_host_dyn uses a fake VM enti
 * loader: `armtr_load_raw()` (additive, `armtr_loader_ext.h`) - map-only load, optional fixed base.
 * engine: top-byte-ignore. Android arm64 userspace relies on TBI (bionic's scudo ORs 0x02<<56 into every heap pointer).
   `engine.cc` now selects Unicorn's virtual TLB (`UC_TLB_VIRTUAL`) with a `UC_HOOK_TLB_FILL` that strips bits 63:56.
+  Since 06-performance.md, data accesses bypass the TLB and the translator strips the tag (TCR TBI bits).
 * Unicorn (scripts/fetch-unicorn.sh): `atomic_template.h` xchg helper (SWP/SWPAL, bionic's mutex) was a non-atomic load+store;
   now `atomic_xchg__nocheck`. Without it pthread_test_dyn deadlocks. Rebuild Unicorn after re-running the script.

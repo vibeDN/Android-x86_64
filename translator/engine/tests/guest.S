@@ -101,3 +101,13 @@ f_nest:
     blr x16
     ldp x29, x30, [sp], #16
     ret
+    .balign 64
+// slot 13: store x1 to [x0] as new code and publish it like __clear_cache: dc cvau; dsb; ic ivau; dsb; isb
+f_store_code:
+    str x1, [x0]
+    dc cvau, x0
+    dsb ish
+    ic ivau, x0
+    dsb ish
+    isb
+    ret

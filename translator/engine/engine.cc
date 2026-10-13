@@ -4,7 +4,12 @@
 // Design summary
 //  * One uc_engine per armtr_cpu. The whole user address space [0x10000, 2^47-0x10000) is mapped once per
 //    cpu with uc_mem_map_ptr(addr, size, ALL, host_ptr == addr): guest VA == host VA, no sync ever.
-//    armtr_mem_map/unmap/protect therefore only invalidate translated code (no per-cpu remapping).
+//    armtr_mem_map/protect therefore only invalidate translated code (no per-cpu remapping), and only for ranges
+//    becoming executable.
+//  * Performance (docs/translator/06-performance.md, Unicorn patch scripts/unicorn-armtr-perf.patch): translated
+//    loads/stores access host memory directly (no softmmu TLB; ARMTR_SOFTMMU=1 restores it), TBI is done by
+//    the translator (TCR TBI bits), TBs chain across pages, new code is published by IC IVAU (on_ic_ivau) or
+//    by a PROT_EXEC map/protect (applied by every cpu at its next syscall).
 //  * Faults: accesses outside the window (null page, kernel half) are reported by Unicorn
 //    (UC_ERR_*_UNMAPPED) with exact pc/address. Accesses inside the window to pages that are unmapped
 //    on the host raise a host SIGSEGV/SIGBUS inside translated code; a chained handler (active only
@@ -26,6 +31,7 @@ extern "C" {  // uc_repair.c (Unicorn internals, pinned to 2.1.4)
 int armtr_uc_nested_level(uc_engine*);
 void armtr_uc_repair(uc_engine*, int nested_level);
 void armtr_uc_unstop(uc_engine*);
+void armtr_uc_tune(uc_engine*, int direct, void (*ic_ivau)(uc_engine*, uint64_t));
 int armtr_uc_restore(uc_engine*, uintptr_t host_pc);
 }
 
@@ -37,6 +43,7 @@ int armtr_uc_restore(uc_engine*, uintptr_t host_pc);
 #include <stdlib.h>
 #include <ucontext.h>
 
+#include <atomic>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -62,6 +69,8 @@ std::shared_mutex g_tramp_mu;
 std::unordered_map<uint64_t, Tramp> g_tramps;
 std::vector<Range> g_log;             // invalidation log; cpu cursor = absolute index
 uint64_t g_log_base = 0;              // absolute index of g_log[0]
+std::atomic<uint64_t> g_log_end{0};   // g_log_base + g_log.size(), readable without g_mu
+bool g_direct = true;                 // direct guest memory access (ARMTR_SOFTMMU=1: Unicorn's softmmu TLB)
 constexpr size_t kLogMax = 4096;
 bool g_inited = false;
 struct sigaction g_old_segv, g_old_bus;
@@ -141,6 +150,8 @@ void set_err(armtr_cpu* c, const char* what, int kind, uint64_t addr, uint64_t p
 
 uint64_t rd(uc_engine* uc, int reg) { uint64_t v = 0; uc_reg_read(uc, reg, &v); return v; }
 
+void sync_cache(armtr_cpu* c);
+
 void on_intr(uc_engine* uc, uint32_t no, void* ud) {
   armtr_cpu* c = (armtr_cpu*)ud;
   uint64_t pc = rd(uc, UC_ARM64_REG_PC);
@@ -179,6 +190,7 @@ void on_intr(uc_engine* uc, uint32_t no, void* ud) {
   int64_t r = c->svc ? c->svc(c, v[0], v + 1, c->svc_user) : -38;
   uint64_t x0 = (uint64_t)r;
   uc_reg_write(uc, UC_ARM64_REG_X0, &x0);
+  sync_cache(c);   // mmap/mprotect(PROT_EXEC) by this or another thread: drop stale translations now
   if (c->kicked && g_sig_hook && !c->exit_req) {   // e.g. a host signal interrupted this syscall
     c->kicked = 0;
     g_sig_hook(c, nullptr, (int64_t)v[0], v[1]);
@@ -209,10 +221,20 @@ void log_range(uint64_t b, uint64_t e) {
   std::lock_guard<std::mutex> l(g_mu);
   if (g_log.size() >= kLogMax) { g_log_base += g_log.size(); g_log.clear(); }
   g_log.push_back({b, e});
+  g_log_end.store(g_log_base + g_log.size());
 }
 
-// Apply invalidations other cpus/loader announced since this cpu last ran.
+// IC IVAU (direct memory mode): the guest published new code at va (one 64-byte cache line, CTR_EL0.IminLine).
+// ponytail: one log entry per line; a large JIT flush overflows the log and laggard cpus do a full TB flush.
+void on_ic_ivau(uc_engine* uc, uint64_t va) {
+  va = (uint64_t)((int64_t)(va << 8) >> 8) & ~63ull;   // TBI
+  uc_ctl_remove_cache(uc, va, va + 64);
+  log_range(va, va + 64);   // other cpus: at their next syscall / run entry
+}
+
+// Apply invalidations other cpus/loader announced since this cpu last ran (cheap no-op when nothing is new).
 void sync_cache(armtr_cpu* c) {
+  if (c->log_cursor == g_log_end.load(std::memory_order_relaxed)) return;
   std::vector<Range> todo; bool full = false;
   {
     std::lock_guard<std::mutex> l(g_mu);
@@ -245,6 +267,8 @@ int armtr_init(void) {
   sa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_ONSTACK;
   sigemptyset(&sa.sa_mask);
   if (sigaction(SIGSEGV, &sa, &g_old_segv) || sigaction(SIGBUS, &sa, &g_old_bus)) return -1;
+  const char* sm = getenv("ARMTR_SOFTMMU");
+  g_direct = !(sm && *sm == '1');
   g_inited = true;
   return 0;
 }
@@ -262,6 +286,12 @@ armtr_cpu* armtr_cpu_create_ex(armtr_svc_fn svc, void* svc_user, size_t stack_si
   }
   uc_engine* uc = c->uc;
   uc_ctl_set_cpu_model(uc, UC_CPU_ARM64_MAX);
+  armtr_uc_tune(uc, g_direct, on_ic_ivau);
+  // Top-byte-ignore in the translator (QEMU strips the tag before every data access and branch). Unicorn runs
+  // the guest at EL3 (single range: TCR_EL3.TBI); TCR_EL1.TBI0/1 too in case that ever changes.
+  uc_arm64_cp_reg tcr1 = {2, 0, 3, 0, 2, 3ull << 37}, tcr3 = {2, 0, 3, 6, 2, 1ull << 20};
+  uc_reg_write(uc, UC_ARM64_REG_CP_REG, &tcr1);
+  uc_reg_write(uc, UC_ARM64_REG_CP_REG, &tcr3);
   uc_ctl_set_tcg_buffer_size(uc, 16u << 20);
   uc_ctl_tlb_mode(uc, UC_TLB_VIRTUAL);   // identity fill via on_tlb_fill (strips the top byte)
   uc_hook h;
@@ -301,15 +331,17 @@ void armtr_cpu_destroy(armtr_cpu* c) {
 
 static void inval(uint64_t addr, size_t len) { log_range(addr, addr + len); }
 
+// The identity window already covers everything; these only drop stale translations. Only a range becoming
+// executable can make a translation stale (code is never run from a non-exec mapping, and unmapped code can
+// only come back through a later PROT_EXEC map/protect, which is logged then). Code rewritten in place in RWX
+// memory is covered by IC IVAU (direct mode) or Unicorn's notdirty tracking (ARMTR_SOFTMMU=1).
 int armtr_mem_map(uint64_t addr, size_t len, int prot) {
-  (void)prot;
   if (!len || addr + len < addr) return -1;
-  inval(addr, len);  // identity window already covers it; just drop stale translations
+  if (prot & 4) inval(addr, len);
   return 0;
 }
 int armtr_mem_unmap(uint64_t addr, size_t len) {
   if (!len || addr + len < addr) return -1;
-  inval(addr, len);
   return 0;
 }
 int armtr_mem_protect(uint64_t addr, size_t len, int prot) { return armtr_mem_map(addr, len, prot); }
@@ -403,7 +435,13 @@ int armtr_run(armtr_cpu* c, uint64_t stop_addr) {
         uc_reg_write(uc, UC_ARM64_REG_PC, &fpc);
       }
       if (g_sig_hook && g_sig_hook(c, &ft, -1, 0)) continue;
-      if (jr == 1) set_err(c, "host-unmapped guest access", F_OTHER, f.addr, rd(uc, UC_ARM64_REG_PC));
+      if (jr == 1) {
+        bool fetch = (ft.esr >> 26) == 0x20, wr = ft.esr & 0x40;
+        int k = fetch ? F_FETCH : wr ? F_WRITE : F_READ;
+        bool acc = ft.code == 2;   // SEGV_ACCERR: mapped on the host but protected
+        set_err(c, fetch ? (acc ? "protected fetch" : "unmapped fetch") : wr ? (acc ? "protected write" : "unmapped write")
+                         : (acc ? "protected read" : "unmapped read"), k, ft.addr, rd(uc, UC_ARM64_REG_PC));
+      }
       rc = -1;
       break;
     }

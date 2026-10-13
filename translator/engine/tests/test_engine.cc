@@ -164,6 +164,19 @@ int main() {
     CHECK(g_kicks > 0);
     armtr_set_signal_hook(nullptr);
   }
+  { // self-modifying code: a guest store + IC IVAU into an already translated page (TLB entry dirtied by an
+    // earlier data store) must drop the stale translation without any armtr_mem_* call
+    uint32_t* code = (uint32_t*)(G + 0x9000);
+    uint64_t s[2] = {(uint64_t)(G + 0x9100), 5};
+    CHECK(armtr_call(c, slot(G, F_STORE), s, 2, &r) == 0);
+    code[0] = 0xD2800020u; code[1] = 0xD65F03C0u;   // mov x0,#1; ret
+    armtr_mem_map((uint64_t)code, 8, 7);
+    uint64_t a[1] = {0};
+    CHECK(armtr_call(c, (uint64_t)code, a, 0, &r) == 0 && r == 1);
+    s[0] = (uint64_t)code; s[1] = 0xD65F03C0D2800040ull;  // mov x0,#2; ret
+    CHECK(armtr_call(c, slot(G, F_STORE_CODE), s, 2, &r) == 0);
+    CHECK(armtr_call(c, (uint64_t)code, a, 0, &r) == 0 && r == 2);
+  }
   { // two cpus, two threads, shared counter with ldaxr/stlxr
     uint64_t* cell = (uint64_t*)mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     Th t1{G, cell, 100000}, t2{G, cell, 100000};

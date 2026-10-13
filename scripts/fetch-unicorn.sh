@@ -25,6 +25,12 @@ a="    ret = *haddr;\n    *haddr = val;\n"
 b="    ret = atomic_xchg__nocheck(haddr, val);\n"
 if a in s: open(p,'w').write(s.replace(a,b))
 P
+# Performance (docs/translator/06-performance.md): direct guest memory access without the softmmu TLB
+# (uc->armtr_direct_mem, set by translator/engine), TBI in the translator, IC IVAU -> engine callback, cross-page
+# TB chaining, inline TB-start exit check, notdirty slow path only for pages holding code, no pc restore per TLB
+# fill, cached exit TB between uc_emu_start calls, direct DC ZVA/atomics, SSE4.2 crc32c.
+P="$(cd "$(dirname "$0")" && pwd)/unicorn-armtr-perf.patch"
+git -C unicorn/src apply --reverse --check "$P" 2>/dev/null || git -C unicorn/src apply "$P"
 mkdir -p unicorn/build && cd unicorn/build
 cmake ../src -DCMAKE_BUILD_TYPE=Release -DUNICORN_ARCH=aarch64 -DUNICORN_BUILD_TESTS=OFF
 cmake --build . -j2
