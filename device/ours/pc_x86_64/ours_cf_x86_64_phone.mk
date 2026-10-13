@@ -20,6 +20,11 @@ PRODUCT_COPY_FILES += \
 PRODUCT_COPY_FILES += \
     device/ours/pc_x86_64/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
 
+# Networking: keep the first NIC as eth0 so EthernetService (regex (eth|usb)\d+, feature
+# android.hardware.ethernet from cuttlefish device.mk) manages it with DHCP from NetworkStack. Cuttlefish
+# renames it to buried_eth0 (cellular backing for its RIL), which no PC needs.
+PRODUCT_VENDOR_PROPERTIES += ro.vendor.disable_rename_eth0=true
+
 # Framework config overlay (desktop mode on the internal display)
 PRODUCT_PACKAGES += ours_overlay_desktop
 PRODUCT_PACKAGES += OursLawnchair
