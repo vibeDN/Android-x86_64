@@ -140,3 +140,7 @@ Checked by hand over `adb connect` (adbd on tcp:5555, host key preinstalled):
   - main process: `mozilla.appservices.fxaclient.InternalException: Callback interface method returned unexpected error` (Rust uniffi callback through JNA; suspect JNA/libffi closures under the translator);
   - Gecko child process: `Fatal signal 11 (SIGSEGV), SEGV_MAPERR, fault addr 0x0` in thread `Gecko` shortly after `GeckoLoader.nativeRun`.
 - Note: QEMU boot needs `bootindex=0` on the NVMe disk (shared OVMF_VARS otherwise prefers PXE once a NIC is present).
+- B8 follow-up: the bridge now invalidates translations when guest memory becomes executable (set_exec -> armtr_mem_protect).
+  Re-test on the rebuilt image: Fennec STILL fails with the same uniffi `InternalException` in the main process, so the
+  libffi-closure/SMC hypothesis did not explain it. Next: trace the JNA callback path (libjnidispatch `callback_dispatch`,
+  the Java CallbackReference return value and the uniffi RustCallStatus struct passed by pointer) under armtr. Parked.

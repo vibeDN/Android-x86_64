@@ -90,16 +90,23 @@ std::mutex g_x_mu;
 std::map<uint64_t, uint64_t> g_exec;   // start -> end
 void set_exec(uint64_t b, uint64_t len, bool x) {
   uint64_t e = b + ((len + 4095) & ~4095ull);
-  std::lock_guard<std::mutex> l(g_x_mu);
-  auto it = g_exec.lower_bound(b);
-  if (it != g_exec.begin() && std::prev(it)->second > b) --it;
-  while (it != g_exec.end() && it->first < e) {
-    uint64_t s = it->first, t = it->second;
-    it = g_exec.erase(it);
-    if (s < b) g_exec[s] = b;
-    if (t > e) g_exec[e] = t;
+  {
+    std::lock_guard<std::mutex> l(g_x_mu);
+    auto it = g_exec.lower_bound(b);
+    if (it != g_exec.begin() && std::prev(it)->second > b) --it;
+    while (it != g_exec.end() && it->first < e) {
+      uint64_t s = it->first, t = it->second;
+      it = g_exec.erase(it);
+      if (s < b) g_exec[s] = b;
+      if (t > e) g_exec[e] = t;
+    }
+    if (x) g_exec[b] = e;
   }
-  if (x) g_exec[b] = e;
+  // When code becomes executable (mmap/mprotect with PROT_EXEC), notify the engine to invalidate
+  // any stale cached translations. This is critical for runtime code generation (libffi closures, JIT)
+  // where code is written then made executable. The engine applies this at the next syscall boundary.
+  // ponytail: coarse invalidation per range; per-page tracking deferred (SMC already uncommon, docs/translator/06-performance.md).
+  if (x) armtr_mem_protect(b, e - b, 7);   // 7 = PROT_READ | PROT_WRITE | PROT_EXEC
 }
 bool is_guest_code(const void* p) {
   uint64_t a = (uint64_t)p;
