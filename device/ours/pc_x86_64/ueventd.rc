@@ -1,0 +1,2 @@
+# Modalias handling for hardware-specific driver auto-loading
+modalias_handling enabled

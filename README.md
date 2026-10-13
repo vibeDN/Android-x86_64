@@ -6,20 +6,25 @@ for x86_64 machines (DeX-style windowing + Material You), with root platform sup
 
 ## Status
 
-- AOSP 16 (`android16-qpr2-release`) builds for x86_64 from our own product `ours_cf_x86_64_phone`.
-- Boots on our own kernel (Android common kernel 6.12 + Rust, built with the AOSP Rust/clang toolchain)
-  with our own kernel modules and `vendor_dlkm` / `system_dlkm` images, in QEMU/KVM.
-- Keyboard and mouse input work; Android desktop windowing (apps open in freeform windows by default, Material You captions,
-  taskbar) is enabled from the image.
-- **Not done yet:** real hardware boot (installer image, GPU drivers: Mesa NVK/nouveau for NVIDIA),
-  KernelSU/Zygisk, ARM→x86 translator, our own desktop shell (see `design/`).
+- AOSP 16 (`android16-qpr2-release`) builds for x86_64 from our own product `ours_cf_x86_64_phone`, on our own
+  kernel (Android common kernel 6.12 + Rust) with our own modules.
+- **Boots on real hardware** (tested: ASUS TUF Gaming F17, i5-12500H) from a USB stick: UEFI + GRUB (Material You
+  theme), native resolution through the UEFI framebuffer (simpledrm), Ethernet, keyboard/mouse, adb over the network.
+- Desktop windowing from the image (apps open in freeform windows), Lawnchair 16-dev as the home screen/taskbar.
+- **armtr**, our own ARM64 -> x86_64 translator (native bridge, GPL-2.0, Unicorn/QEMU TCG based): arm64-only apps run,
+  e.g. Telegram clients (TDLib), VLC, Organic Maps, Kodi, Mindustry, Syncthing; arm64 executables via binfmt_misc.
+  See `docs/translator/`.
+- Simple disk installer (whole-disk, v1): `scripts/installer/`, `docs/INSTALL.md`.
+- **Not done yet:** GPU acceleration (Mesa iris/radeonsi, NVK for NVIDIA), Wi-Fi, audio, KernelSU/Zygisk,
+  DeX-style taskbar per `design/`, Firefox under the translator.
 
 ## Layout
 
 | Path | What |
 |------|------|
 | `device/ours/pc_x86_64/` | Our product definition: desktop-mode properties, PC feature, freeform feature, display defaults, framework RRO overlay |
-| `patches/` | Small patches against AOSP `device/google/cuttlefish` |
+| `patches/` | Small patches against AOSP (cuttlefish, frameworks, minigbm, kernel, Lawnchair) |
+| `translator/` | armtr ARM64 -> x86_64 translator (GPL-2.0-or-later) |
 | `kernel/` | Kernel config used for our build (derived from the Cuttlefish GKI config) |
 | `scripts/build/` | Build helpers: product build, kernel+modules build, module directory staging, memory guard |
 | `scripts/qemu/` | QEMU boot helpers: disk assembly, run script, QMP input/screenshot helpers |

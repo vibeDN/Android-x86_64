@@ -1,0 +1,14 @@
+Redistributable Firmware
+========================
+
+This directory contains firmware files required for hardware drivers on PC systems.
+These are redistributable linux-firmware blobs licensed under compatible open-source
+licenses (GPL, BSD, MIT, or permissive proprietary).
+
+To repopulate from upstream linux-firmware:
+  git clone https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git
+  cp linux-firmware/rtl_nic/rtl8168*.fw ./
+
+References:
+  - linux-firmware: https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git
+  - Realtek rtl_nic firmware: Licensed under Realtek firmware license (permissive)

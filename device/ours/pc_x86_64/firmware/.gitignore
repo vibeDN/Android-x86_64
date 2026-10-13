@@ -1,0 +1,3 @@
+# Firmware blobs: repopulate from linux-firmware repo
+*.fw
+!README

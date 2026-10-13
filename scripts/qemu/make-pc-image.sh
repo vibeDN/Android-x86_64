@@ -82,7 +82,7 @@ insmod all_video
 insmod gfxterm
 insmod gfxmenu
 insmod png
-set gfxmode=${GFXMODE:-1280x800,1024x768,auto}
+set gfxmode=${GFXMODE:-1920x1080,auto}
 set gfxpayload=keep
 ${LOADFONTS}set gfxterm_font="Noto Sans Medium 20"
 terminal_output gfxterm
@@ -94,7 +94,9 @@ menuentry "Android (x86_64)" {
     initrd /initrd.img
 }
 EOF
-grub-mkstandalone -O x86_64-efi -o "$W/BOOTX64.EFI" --compress=xz --modules="part_gpt part_msdos fat search search_label search_fs_file search_fs_uuid normal linux echo efi_gop video all_video gfxterm gfxmenu gfxterm_background png font gfxterm_menu" "boot/grub/grub.cfg=$W/grub.cfg" >/dev/null 2>&1
+# The EFI binary only finds the ESP and loads /grub.cfg from it, so the config can be edited in place.
+printf 'search --no-floppy --label --set=root EFI\nconfigfile ($root)/grub.cfg\n' > "$W/embed.cfg"
+grub-mkstandalone -O x86_64-efi -o "$W/BOOTX64.EFI" --compress=xz --modules="part_gpt part_msdos fat search search_label search_fs_file search_fs_uuid normal linux echo efi_gop video all_video gfxterm gfxmenu gfxterm_background png font gfxterm_menu configfile" "boot/grub/grub.cfg=$W/embed.cfg" >/dev/null 2>&1
 mmd -i "$W/esp.img" ::/EFI ::/EFI/BOOT
 mcopy -i "$W/esp.img" "$W/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$W/esp.img" "$C/boot/kernel" ::/kernel

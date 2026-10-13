@@ -29,5 +29,8 @@ print("system: want %d have %d" % (len(orig_sys), len(orig_sys) - len(ms)))
 print("  missing:", " ".join(ms))
 print("vendor: want %d have %d" % (len(orig_vnd), len(orig_vnd) - len(mv)))
 print("  missing:", " ".join(mv))
-extra = [n for n in ours if n not in orig_sys and n not in orig_vnd]
-print("our modules not in either original list: %d" % len(extra))
+# PC hardware drivers (GPU, touchpad, Wi-Fi, ...) that the Cuttlefish lists do not have: vendor_dlkm.
+# ueventd loads them by MODALIAS (device/ours/pc_x86_64/ueventd.rc), like udev on a desktop distro.
+extra = sorted(n for n in ours if n not in orig_sys and n not in orig_vnd)
+fill(extra, VND)
+print("extra PC modules added to vendor_dlkm: %d" % len(extra))

@@ -16,6 +16,12 @@ PRODUCT_COPY_FILES += \
     device/ours/pc_x86_64/android.hardware.type.pc.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/permissions/android.hardware.type.pc.xml \
     frameworks/native/data/etc/android.software.freeform_window_management.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/permissions/android.software.freeform_window_management.xml
 
+# Firmware (linux-firmware blobs, not in git): kernel loads from firmware_class.path=/vendor/etc/
+PRODUCT_COPY_FILES += $(foreach f,$(wildcard device/ours/pc_x86_64/firmware/rtl_nic/*.fw),$(f):$(TARGET_COPY_OUT_VENDOR)/etc/rtl_nic/$(notdir $(f)))
+
+# Load hardware-specific kernel modules by MODALIAS (like udev in a desktop initramfs)
+PRODUCT_COPY_FILES += device/ours/pc_x86_64/ueventd.rc:$(TARGET_COPY_OUT_ODM)/etc/ueventd.rc
+
 # Default windowing mode of the display: freeform
 PRODUCT_COPY_FILES += \
     device/ours/pc_x86_64/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
