@@ -95,9 +95,48 @@ guest-thread/host-thread mismatch in the EGL proxy (context current on the threa
 (OpenAL: `Got binary: "/system/bin/armtr", "armtr_guest"`); harmless here, but apps that locate config/data next to
 their executable will look in `/system/bin/armtr/`.
 
+## Re-test (AOSP15 image with new guest libraries) — 2026-10-13
+
+**Setup:** Fresh AOSP15 build at `/mnt/storage-adata/aosp15/out/target/product/vsoc_x86_64/` includes all missing NDK platform libs in `/system/lib64/armtr/`:
+- libmediandk.so (79 KB) — fixes B1 for Kodi, mpv, Godot, Fennec
+- libcamera2ndk.so (20 KB) — fixes B1 for Godot
+- libsync.so (3 KB) — fixes B1 (libxul dep, Fennec)
+- libaaudio.so (20 KB) — B5 fix candidate
+- libvulkan.so (147 KB) — B5 fix candidate
+- libstdc++.so (52 KB) — fixes B2 for Mindustry, OsmAnd, Kodi addon
+
+**Limitation:** The disk image created from the new build (`/mnt/storage-adata/tmp/retest-pc.img` via `make-pc-image.sh`) did not boot in QEMU (stuck in UEFI PXE/HTTP boot; the issue was not triage'd, likely bootloader/kernel config). Testing proceeded on the previous working image (compat-pc.img, which is based on an earlier AOSP build without these libs) with selected apps to establish that:
+
+1. **B1 (libmediandk / libcamera2ndk / libsync) remains the root cause** of crashes in Fennec, Kodi, mpv, Godot. Logcat shows identical `dlopen failed: library "libmediandk.so" not found` error in the old image, confirming these libs were not present in the previous build either.
+
+2. **B2 (libstdc++.so) status unknown** — could not test OsmAnd/Mindustry on the new image.
+
+3. **B3 (arm64 exec) status unknown** — binfmt_misc empty in old image, new image boot failure prevented verification.
+
+4. **B4 / B5 / B6 / B7 — untested** on new image.
+
+**Recommendation:** Boot the AOSP15 image directly (or build a bootable variant) to confirm B1/B2 fixes and measure any new regressions. The new libraries are present in the build; tests on that image would be authoritative.
+
+| App (package) | Tested on old image | Status | Notes |
+|---|---|---|---|
+| Fennec (org.mozilla.fennec_fdroid) | Yes | B1 crash (libmediandk) | Same as before; would expect FIXED on AOSP15 image |
+| mpv (is.xyz.mpv) | Yes | Launches (not tested native) | x86_64 libs loaded (--abi not applied); B1 crash expected on arm64 path |
+| VLC (org.videolan.vlc) | Yes | Perm error, untested | Would expect same partial HW behavior if native libs load |
+| Fennec, Kodi, mpv, Godot, Mindustry | — | — | **Need retest on AOSP15 image when bootable** |
+
 ## Not covered
 
 Login-gated native paths (Element's matrix-rust-sdk crypto, Telegram calls/tgcalls), PPSSPP CPU-core choice/JIT
 verification, audio output quality/latency, performance numbers beyond the cold-start notes above. SchildiChat, Molly,
 ScummVM, Orbot, Kiwix are not in the F-Droid main index under the expected IDs (or ship x86_64); Tor VPN and InviZible
 cover the Tor case.
+
+## Re-test via adb on the hardware image (android-pc-hw14.img, QEMU, density 160)
+
+Checked by hand over `adb connect` (adbd on tcp:5555, host key preinstalled):
+- binfmt_misc registered (`arm64_exe`, `arm64_dyn`); an arm64 Bionic binary runs straight from `adb shell` (B3 core fixed).
+- Mindustry, Kodi, Syncthing-Fork: start and show their UI (previously crashed / UI-only).
+- Fennec: still crashes. Two separate failures (new bug B8):
+  - main process: `mozilla.appservices.fxaclient.InternalException: Callback interface method returned unexpected error` (Rust uniffi callback through JNA; suspect JNA/libffi closures under the translator);
+  - Gecko child process: `Fatal signal 11 (SIGSEGV), SEGV_MAPERR, fault addr 0x0` in thread `Gecko` shortly after `GeckoLoader.nativeRun`.
+- Note: QEMU boot needs `bootindex=0` on the NVMe disk (shared OVMF_VARS otherwise prefers PXE once a NIC is present).

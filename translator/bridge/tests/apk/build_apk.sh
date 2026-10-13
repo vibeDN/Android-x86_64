@@ -3,7 +3,7 @@
 # Builds armtr-bridge-test.apk (no Gradle): javac -> d8 -> aapt2 link -> add lib/arm64-v8a -> zipalign -> apksigner.
 # Usage: build_apk.sh <libjni_bridge_test.so> <out.apk>
 set -e
-SO=$(realpath "$1"); OUT=$(realpath -m "$2"); HERE=$(cd "$(dirname "$0")" && pwd)
+SO=$(realpath "$1"); OUT=$(realpath -m "$2"); HERE=${APK_DIR:-$(cd "$(dirname "$0")" && pwd)}   # APK_DIR: other manifest+src
 SDK=${ANDROID_SDK:-/mnt/storage-adata/android-sdk}; BT=$SDK/build-tools/37.0.0; JAR=$SDK/platforms/android-36/android.jar
 export JAVA_HOME=${JAVA_HOME:-/mnt/storage-adata/aosp15/prebuilts/jdk/jdk21/linux-x86}; export PATH=$JAVA_HOME/bin:$PATH
 W=$(mktemp -d); trap 'rm -rf $W' EXIT

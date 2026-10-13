@@ -4,6 +4,7 @@
 # Not vendored. Then: cmake -S translator/engine -B out -DUNICORN_DIR=$PWD/translator/third_party-build/unicorn
 set -e
 TAG=2.1.4
+HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST="$(cd "$(dirname "$0")/.." && pwd)/translator/third_party-build"
 mkdir -p "$DEST"
 cd "$DEST"
@@ -29,7 +30,7 @@ P
 # (uc->armtr_direct_mem, set by translator/engine), TBI in the translator, IC IVAU -> engine callback, cross-page
 # TB chaining, inline TB-start exit check, notdirty slow path only for pages holding code, no pc restore per TLB
 # fill, cached exit TB between uc_emu_start calls, direct DC ZVA/atomics, SSE4.2 crc32c.
-P="$(cd "$(dirname "$0")" && pwd)/unicorn-armtr-perf.patch"
+P="$HERE/unicorn-armtr-perf.patch"
 git -C unicorn/src apply --reverse --check "$P" 2>/dev/null || git -C unicorn/src apply "$P"
 mkdir -p unicorn/build && cd unicorn/build
 cmake ../src -DCMAKE_BUILD_TYPE=Release -DUNICORN_ARCH=aarch64 -DUNICORN_BUILD_TESTS=OFF

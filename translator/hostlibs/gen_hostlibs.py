@@ -11,7 +11,11 @@ act  : one char per argument, '.' = plain.  E guest JNIEnv*->host  C guest callb
        OpenSL ES: S wrapped interface -> host, I SLInterfaceID in, A SLInterfaceID array in (count = prev arg),
        D SLDataSource/Sink (unwrap OutputMix locator), W out SLObjectItf*, G out interface of GetInterface,
        Q out SLInterfaceID*, X = S + forget wrapper after call (Destroy).
-cb   : "<argidx>:<S|->:<callback sig>" for the C action.
+       T pointer to a struct of {context, callbacks...} (camera/AImageReader listeners, VkAllocationCallbacks): the
+       host gets a copy with every callback member replaced by a host thunk (the host libs copy these structs).
+       N Vulkan create info whose pNext chain may hold debug-messenger/report create infos (callbacks swapped in place).
+cb   : "<argidx>:<S|->:<callback sig>" for the C action, "<argidx>:T:<m0>,<m1>,..." for T (member '-' = plain).
+Data symbols (`extern const char* X`, e.g. AMEDIAFORMAT_KEY_*) go to kData {table, name}: the guest gets a copy.
 Functions that cannot be marshalled (struct by value, long double, float callbacks...) are listed in
 gen/skipped.txt.  Usage: gen_hostlibs.py [--aosp /path/to/aosp15] [--out gen]
 """
@@ -88,14 +92,16 @@ def statements(text):
 
 class Types:
     def __init__(self, text):
-        self.td = {}
+        self.td, self.members = {}, {}
         for st in statements(text):
             if st.startswith('typedef '):
                 self.add(st[8:])
+        self.td.setdefault('size_t', ('type', 'unsigned long'))   # used by headers that do not include stddef.h
+        self.td.setdefault('ssize_t', ('type', 'long'))
 
     def add(self, st):
         kind = None
-        m = re.match(r'(struct|union|enum)\b[^{]*(\{.*\})', st)
+        m0 = m = re.match(r'(struct|union|enum)\b[^{]*(\{.*\})', st, re.S)
         if m:
             kind = m.group(1)
         body = st
@@ -118,6 +124,9 @@ class Types:
         base, star, name, arr = m.groups()
         if kind in ('struct', 'union') and not star:
             self.td[name] = ('struct',)
+            inner = m0.group(2)[1:-1]
+            if kind == 'struct' and '{' not in inner:
+                self.members[name] = inner
         elif kind == 'enum' and not star:
             self.td[name] = ('enum',)
         elif arr:
@@ -163,6 +172,40 @@ class Types:
         if len(w) == 1 and w[0] in self.td and self.td[w[0]][0] == 'fnptr':
             return self.td[w[0]][1:]
         return None
+
+    def cb_sig(self, t):
+        """'r(args)' if t is a function pointer type with an int-class signature, None if not a function pointer"""
+        fp = self.fnptr_of(t)
+        raw = clean(t)
+        if fp is None and re.search(r'\(\s*\*', raw):
+            m = re.match(r'(.*?)\(\s*\*\s*\w*\s*\)\s*\((.*)\)$', raw)
+            fp = (m.group(1), m.group(2))
+        if fp is None:
+            return None
+        cs = [self.sig(x) if clean(x) != 'void' else '' for x in (param(a, self)[0] for a in split_args(fp[1]))]
+        cr = self.sig(fp[0])
+        if any(x not in INTCLASS for x in cs) or cr not in INTCLASS | {'v'} or len(cs) > 8:
+            raise Skip('callback not int-class')
+        return '%s(%s)' % (cr, ''.join(cs))
+
+    def cb_struct(self, t):
+        """member list 'm0,m1,..' if t is a pointer to a struct made of pointers incl. >= 1 callback, else None"""
+        raw = clean(t)
+        if raw.count('*') != 1 or not raw.endswith('*'):
+            return None
+        w = [x for x in raw[:-1].split() if x not in QUAL and x not in ('struct',)]
+        if len(w) != 1 or w[0] not in self.members:
+            return None
+        out = []
+        for mem in self.members[w[0]].split(';'):
+            mem = clean(mem)
+            if not mem: continue
+            pt = param(mem, self)[0]
+            cs = self.cb_sig(pt)
+            if cs: out.append(cs)
+            elif '*' in pt: out.append('-')
+            else: return None              # non-pointer member: not a plain callback table
+        return ','.join(out) if any(x != '-' for x in out) else None
 
 def split_args(a):
     out, d, cur = [], 0, ''
@@ -231,6 +274,12 @@ def proto_entry(name, ret, params, var, ty, sl=False, itf=None):
                     raise Skip('callback not int-class')
                 cb += (';' if cb else '') + '%d:%s:%s(%s)' % (i, 'S' if sl and cs and re.match(r'SL\w*Itf$', clean(param(split_args(fp[1])[0], ty)[0])) else '-', cr, ''.join(cs))
                 chars.append('p'); act.append('C'); continue
+            cst = ty.cb_struct(t)
+            if cst:
+                if name == 'ACameraManager_openCamera':   # member 3 (shared-camera callback, API 36) is absent in
+                    cst = ','.join(cst.split(',')[:3] + ['0'])   # older apps' struct and unused here: pass 0
+                cb += (';' if cb else '') + '%d:T:%s' % (i, cst)
+                chars.append('p'); act.append('T'); continue
             s = ty.sig(t)
         except Skip as e:
             raise Skip('param %d: %s' % (i, e))
@@ -255,6 +304,9 @@ def proto_entry(name, ret, params, var, ty, sl=False, itf=None):
     if ('E' in act or True) and params:
         t0 = clean(params[0][0])
         if re.match(r'(const )?JNIEnv\s*\*', t0): act[0] = 'E'
+    if name in VK_DEBUG_CHAIN:
+        for i, (t, pn) in enumerate(params):
+            if pn == 'pCreateInfo': act[i] = 'N'
     if name in ('deflateInit_', 'deflateInit2_', 'inflateInit_', 'inflateInit2_', 'inflateBackInit_'):
         act[0] = 'Z'
     sig = '%s(%s%s)' % (rs, ''.join(chars), '...' if var else '')
@@ -266,6 +318,8 @@ def proto_entry(name, ret, params, var, ty, sl=False, itf=None):
             raise Skip('special args need int-class signature')
         if var: raise Skip('variadic with special args')
     return sig, (''.join(act).rstrip('.') if simple else ''), cb
+
+VK_DEBUG_CHAIN = ('vkCreateInstance', 'vkCreateDebugUtilsMessengerEXT', 'vkCreateDebugReportCallbackEXT')
 
 def collect(api, ty, skipped, lib, sl=False, prefix=None):
     ents = {}
@@ -287,6 +341,8 @@ def collect(api, ty, skipped, lib, sl=False, prefix=None):
 
 # ---------------------------------------------------------------------------------------------------------
 OPENGL = ['frameworks/native/opengl/include']
+MEDIA_INC = ['frameworks/av/media/ndk/include', 'frameworks/native/include', 'frameworks/native/libs/nativewindow/include',
+             'frameworks/native/libs/arect/include', 'libnativehelper/include_jni']
 LIBS = {
     'LOG': dict(headers=['android/log.h'], incs=['system/logging/liblog/include'], roots=['system/logging/liblog/include'],
                 prefix=r'(__android_|android_)'),
@@ -309,6 +365,19 @@ LIBS = {
     'GLES1': dict(headers=['GLES/gl.h', 'GLES/glext.h'], incs=OPENGL, defs=['GL_GLEXT_PROTOTYPES'], roots=OPENGL, prefix=r'gl'),
     'GLES2': dict(headers=['GLES2/gl2.h', 'GLES2/gl2ext.h', 'GLES3/gl3.h', 'GLES3/gl31.h', 'GLES3/gl32.h'], incs=OPENGL,
                   defs=['GL_GLEXT_PROTOTYPES'], roots=OPENGL, prefix=r'gl'),
+    'MEDIA': dict(headers=['media/Ndk%s.h' % h for h in ('Image', 'ImageReader', 'MediaCodec', 'MediaCodecInfo',
+                  'MediaCodecStore', 'MediaCrypto', 'MediaDataSource', 'MediaDrm', 'MediaError', 'MediaExtractor',
+                  'MediaFormat', 'MediaMuxer')], incs=MEDIA_INC, roots=['frameworks/av/media/ndk/include'],
+                  prefix=r'(AMedia|AImage)'),
+    'CAMERA': dict(headers=['camera/Ndk%s.h' % h for h in ('CameraManager', 'CameraDevice', 'CameraCaptureSession',
+                   'CameraMetadata', 'CaptureRequest')], incs=['frameworks/av/camera/ndk/include'] + MEDIA_INC,
+                   roots=['frameworks/av/camera/ndk/include'], prefix=r'(ACamera|ACapture)'),
+    'SYNC': dict(headers=['android/sync.h'], incs=['system/core/libsync/include'], roots=['system/core/libsync/include'],
+                 prefix=r'sync_'),
+    'AAUDIO': dict(headers=['aaudio/AAudio.h'], incs=['frameworks/av/media/libaaudio/include'],
+                   roots=['frameworks/av/media/libaaudio/include'], prefix=r'AAudio'),
+    'VULKAN': dict(headers=['vulkan/vulkan.h'], incs=['external/vulkan-headers/include'] + MEDIA_INC,
+                   defs=['VK_USE_PLATFORM_ANDROID_KHR'], roots=['external/vulkan-headers/include'], prefix=r'vk'),
 }
 EXTRA_PROTOS = {   # exported by the host libs but absent from the NDK headers
     'LOG': ['int __android_log_vprint(int prio, const char* tag, const char* fmt, va_list ap)',
@@ -353,7 +422,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     skipped, o = [], []
     o.append('// SPDX-License-Identifier: GPL-2.0-or-later\n// GENERATED by gen_hostlibs.py from the AOSP headers. Do not edit.\n')
-    counts = {}
+    counts, data = {}, []
     for lib, c in LIBS.items():
         allt, api = preprocess(c['headers'], c['incs'], c.get('defs', []), c['roots'], a.aosp)
         ty = Types(allt)
@@ -363,11 +432,18 @@ def main():
             if pr and pr[0] not in ents:
                 ents[pr[0]] = proto_entry(pr[0], pr[1], pr[2], pr[3], ty)
         counts[lib] = len(ents)
+        for d in sorted(set(re.findall(r'extern\s+const\s+char\s*\*\s*(?:_Nonnull\s+|_Nullable\s+)?(\w+)\s*;', api))):
+            if re.match(c['prefix'], d) or d.startswith('AMEDIA'):
+                data.append((lib, d))
         o.append('static const Ent kTab_%s[] = {' % lib)
         for n in sorted(ents):
             s, act, cb = ents[n]
             o.append('  {%s,%s,%s,%s},' % (q(n), q(s), q(act), q(cb)))
         o.append('};')
+    o.append('static const DataDef kData[] = {')
+    o += ['  {%s, %s},' % (q(l), q(d)) for l, d in data]
+    o.append('};')
+    counts['data'] = len(data)
     funcs, itfs, iids = sles(a.aosp, skipped)
     counts['SLES'] = len(funcs)
     o.append('static const Ent kTab_SLES[] = {')

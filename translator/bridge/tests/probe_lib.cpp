@@ -76,7 +76,8 @@ int main(int argc, char** argv) {
   auto* ns = nb->createNamespace("clns", nullptr, argv[2], 1, argv[2], def);
   // system_exposed_libraries of public.libraries.txt (subset the guest root provides)
   nb->linkNamespaces(ns, def, "libandroid.so:libc.so:libdl.so:libEGL.so:libGLESv1_CM.so:libGLESv2.so:libGLESv3.so:"
-                              "libjnigraphics.so:liblog.so:libm.so:libnativewindow.so:libOpenSLES.so:libz.so");
+                              "libjnigraphics.so:liblog.so:libm.so:libnativewindow.so:libOpenSLES.so:libz.so:libmediandk.so:"
+                              "libcamera2ndk.so:libsync.so:libaaudio.so:libvulkan.so:libstdc++.so");
   int rc = 0;
   for (int i = 3; i < argc; i++) {
     printf("== %s\n", argv[i]);

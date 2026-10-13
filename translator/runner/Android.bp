@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// armtr-run on the device (/system/bin/armtr-run): runs arm64 Bionic executables with the guest linker64
+// (/system/bin/armtr/linker64) and guest libs (/system/lib64/armtr); also the binfmt_misc interpreter for
+// aarch64 ELF files (device/ours/pc_x86_64/translator/binfmt_misc). Host build: CMakeLists.txt.
+
+package {
+    default_applicable_licenses: ["armtr_license"],
+}
+
+cc_binary {
+    name: "armtr-run",
+    defaults: ["armtr_defaults"],
+    srcs: ["armtr_run.cpp"],
+    static_libs: [
+        "libarmtr_runtime",
+        "libarmtr_hostlibs",
+        "libarmtr_proxy",
+        "libarmtr_engine",
+        "libarmtr_loader",
+        "libarmtr_syscalls",
+        "libunicorn_core",
+    ],
+    shared_libs: ["libdl"],
+    init_rc: ["armtr-run.rc"],
+    required: ["armtr_binfmt_arm64_exe", "armtr_binfmt_arm64_dyn"],
+}
+
+prebuilt_etc {
+    name: "armtr_binfmt_arm64_exe",
+    src: "binfmt_arm64_exe",
+    filename: "arm64_exe",
+    sub_dir: "binfmt_misc",
+}
+
+prebuilt_etc {
+    name: "armtr_binfmt_arm64_dyn",
+    src: "binfmt_arm64_dyn",
+    filename: "arm64_dyn",
+    sub_dir: "binfmt_misc",
+}

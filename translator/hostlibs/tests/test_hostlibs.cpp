@@ -299,6 +299,84 @@ static void test_sles() {
         *hsym<void*>("libOpenSLES.so", "fake_sl_self") == *hsym<void*>("libOpenSLES.so", "fake_sl_player_obj"));
 }
 
+// ---- NDK media / camera / sync / aaudio / vulkan ---------------------------------------------------------
+static void test_ndk() {
+  CHECK(!strcmp(armtr_hostlibs_sig("libmediandk.so", "AMediaCodec_dequeueOutputBuffer"), "l(ppl)"));
+  CHECK(!strcmp(armtr_hostlibs_sig("libsync.so", "sync_merge"), "i(pii)"));
+  CHECK(!strcmp(armtr_hostlibs_sig(nullptr, "AMEDIAFORMAT_KEY_MIME"), "data"));
+  CHECK(armtr_hostlibs_sig("libcamera2ndk.so", "ACameraManager_openCamera") && armtr_hostlibs_sig("libaaudio.so", "AAudioStream_write") &&
+        armtr_hostlibs_sig("libvulkan.so", "vkCmdDrawIndexed"));
+  // data symbol: slot -> guest copy of the host string
+  U slot = res("libmediandk.so", "AMEDIAFORMAT_KEY_MIME");
+  CHECK(slot && fake_mapped(slot, 3) && !strcmp(*(const char**)slot, "mime") &&
+        *(const char**)slot != *hsym<const char*>("libmediandk.so", "AMEDIAFORMAT_KEY_MIME"));
+  struct { int32_t off, size; int64_t pts; uint32_t flags; } bi = {};
+  reset(); R.x[0] = 1; R.x[1] = (U)&bi; R.x[2] = 5000;
+  CHECK(call(res("libmediandk.so", "AMediaCodec_dequeueOutputBuffer")) == 3 && bi.size == 4096 && bi.pts == 10000);
+  // AImageReader listener struct: host gets a copy with a host thunk, guest sees its context
+  static U ia[2];
+  fake_guest_fn(0x6300, [](armtr_cpu* c) { ia[0] = c->r.x[0]; ia[1] = c->r.x[1]; });
+  U lis[2] = {0xc0ffee, 0x6300};
+  reset(); R.x[0] = 0x77; R.x[1] = (U)lis;
+  CHECK(call(res("libmediandk.so", "AImageReader_setImageListener")) == 0 && lis[1] == 0x6300);   // guest struct untouched
+  hsym<void(void*)>("libmediandk.so", "fake_media_fire_image")((void*)0x77);
+  CHECK(ia[0] == 0xc0ffee && ia[1] == 0x77);
+  // camera device state callbacks (3-member struct of older apps: member 3 must reach the host as 0)
+  static U ce[3];
+  fake_guest_fn(0x6400, [](armtr_cpu* c) { for (int i = 0; i < 3; i++) ce[i] = c->r.x[i]; });
+  U dcb[4] = {0xabc, 0x6500, 0x6400, 0xdeadbeef}; U dev = 0;
+  reset(); R.x[0] = 1; R.x[1] = (U)"0"; R.x[2] = (U)dcb; R.x[3] = (U)&dev;
+  CHECK(call(res("libcamera2ndk.so", "ACameraManager_openCamera")) == 0 && dev == 0xca3);
+  CHECK(hsym<void*()>("libcamera2ndk.so", "fake_cam_shared")() == nullptr);
+  hsym<void(int)>("libcamera2ndk.so", "fake_cam_fire_error")(4);
+  CHECK(ce[0] == 0xabc && ce[1] == 0xca3 && ce[2] == 4);
+  reset(); R.x[0] = 7; R.x[1] = 0xffffffff;   // timeout -1
+  CHECK((int)call(res("libsync.so", "sync_wait")) == 7000 - 1);
+  // AAudio data callback from a host audio thread
+  static U aa[4];
+  fake_guest_fn(0x6600, [](armtr_cpu* c) { for (int i = 0; i < 4; i++) aa[i] = c->r.x[i]; c->r.x[0] = 0; });
+  reset(); R.x[0] = 0x55; R.x[1] = 0x6600; R.x[2] = 0x5ead;
+  call(res("libaaudio.so", "AAudioStreamBuilder_setDataCallback"));
+  int ar = -1;
+  std::thread([&] { ar = hsym<int(void*, void*, int)>("libaaudio.so", "fake_aaudio_fire")((void*)0x99, (void*)0xb0f, 192); }).join();
+  CHECK(ar == 0 && aa[0] == 0x99 && aa[1] == 0x5ead && aa[2] == 0xb0f && aa[3] == 192);
+
+  // Vulkan: GetInstanceProcAddr returns guest-callable proxies, never host pointers
+  U gipa = res("libvulkan.so", "vkGetInstanceProcAddr");
+  reset(); R.x[0] = 0; R.x[1] = (U)"vkGetInstanceProcAddr"; CHECK(call(gipa) == gipa);
+  reset(); R.x[0] = 0; R.x[1] = (U)"vkNoSuchFunction"; CHECK(call(gipa) == 0);
+  reset(); R.x[0] = 0; R.x[1] = (U)"vkCreateInstance"; U ci_fn = call(gipa);
+  CHECK(ci_fn && fake_mapped(ci_fn, 5) && ci_fn != (U)hsym<void>("libvulkan.so", "vkCreateInstance"));
+  // vkCreateInstance with allocation callbacks + a debug messenger create info in pNext
+  static U al[4], dm[4]; static char amem[64];
+  fake_guest_fn(0x6700, [](armtr_cpu* c) { for (int i = 0; i < 4; i++) al[i] = c->r.x[i]; c->r.x[0] = (U)amem; });
+  fake_guest_fn(0x6800, [](armtr_cpu* c) { for (int i = 0; i < 4; i++) dm[i] = c->r.x[i]; c->r.x[0] = 1; });
+  U alloc[6] = {0xa11, 0x6700, 0, 0x6900, 0, 0};
+  struct { int32_t sType; const void* next; uint32_t fl, sev, ty; U cb, ud; } dbg = {1000128004, nullptr, 0, 0x1111, 7, 0x6800, 0xd8};
+  struct { int32_t sType; const void* next; } ici = {1, &dbg};
+  U inst = 0;
+  reset(); R.x[0] = (U)&ici; R.x[1] = (U)alloc; R.x[2] = (U)&inst;
+  CHECK(call(ci_fn) == 0 && inst == 0x1757);
+  CHECK(al[0] == 0xa11 && al[1] == 64 && al[2] == 16 && al[3] == 1 && *hsym<void*>("libvulkan.so", "fake_vk_allocated") == amem);
+  CHECK(*hsym<int>("libvulkan.so", "fake_vk_cb_ret") == 1 && dm[0] == 0x10 && dm[1] == 1 && !strcmp((char*)dm[2], "during create") && dm[3] == 0xd8);
+  CHECK(dbg.cb == 0x6800 && alloc[1] == 0x6700);                         // guest structs restored / untouched
+  // extension via instance GPA + messenger callback fired later from the host
+  reset(); R.x[0] = inst; R.x[1] = (U)"vkCreateDebugUtilsMessengerEXT"; U cm = call(gipa);
+  CHECK(cm && fake_mapped(cm, 5));
+  U msgr = 0; dbg.ud = 0xd9;
+  reset(); R.x[0] = inst; R.x[1] = (U)&dbg; R.x[2] = 0; R.x[3] = (U)&msgr;
+  CHECK(call(cm) == 0 && msgr == inst + 1 && dbg.cb == 0x6800);
+  CHECK(hsym<uint32_t(const char*)>("libvulkan.so", "fake_vk_fire")("later") == 1 && dm[0] == 0x100 && dm[1] == 2 &&
+        !strcmp((char*)dm[2], "later") && dm[3] == 0xd9);
+  // device GPA: float argument through the generic proxy
+  reset(); R.x[0] = 0; R.x[1] = (U)"vkGetDeviceProcAddr"; U gdpa = call(gipa);
+  CHECK(gdpa && gdpa == res("libvulkan.so", "vkGetDeviceProcAddr"));
+  reset(); R.x[0] = 0xde; R.x[1] = (U)"vkCmdSetLineWidth"; U lw = call(gdpa);
+  CHECK(lw);
+  reset(); R.x[0] = 1; setf(0, 2.5f); call(lw);
+  CHECK(*hsym<void*>("libvulkan.so", "fake_vk_allocated") == (void*)10);
+}
+
 int main() {
   armtr_init();
   cpu = armtr_cpu_create(nullptr, nullptr);
@@ -310,6 +388,7 @@ int main() {
   test_android();
   test_gl();
   test_sles();
+  test_ndk();
   puts("test_hostlibs OK");
   return 0;
 }

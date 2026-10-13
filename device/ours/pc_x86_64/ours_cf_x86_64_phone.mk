@@ -35,15 +35,24 @@ PRODUCT_PACKAGES += OursLawnchair
 # ro.product.cpu.abilist64 = x86_64,arm64-v8a.
 ARMTR_ENABLE ?= true
 ifeq ($(ARMTR_ENABLE),true)
-PRODUCT_PACKAGES += libarmtr_bridge armtr_guest_root
+PRODUCT_PACKAGES += libarmtr_bridge armtr_guest_root armtr-run
 # Overrides `ro.dalvik.vm.native.bridge?=0` of build/make/target/product/runtime_libart.mk (like Berberis'
 # enable_riscv64_to_x86_64.mk). isa.arm64=x86_64 marks arm64 as emulated for PackageManager/ART (dex2oat isa).
-# ro.enable.native.bridge.exec is not set: no binfmt_misc runner for arm64 executables (apps only).
+# ro.enable.native.bridge.exec=1: arm64 executables run through binfmt_misc -> /system/bin/armtr-run
+# (translator/runner/armtr-run.rc, same switch as Berberis).
 PRODUCT_SYSTEM_PROPERTIES += \
     ro.dalvik.vm.native.bridge=libarmtr_bridge.so \
-    ro.dalvik.vm.isa.arm64=x86_64
+    ro.dalvik.vm.isa.arm64=x86_64 \
+    ro.enable.native.bridge.exec=1
 # generic_system.mk's artifact path requirement forbids device-added system props unless allow-listed.
-PRODUCT_ARTIFACT_PATH_REQUIREMENT_SYSPROP_ALLOWED_LIST += ro.dalvik.vm.native.bridge ro.dalvik.vm.isa.arm64
+PRODUCT_ARTIFACT_PATH_REQUIREMENT_SYSPROP_ALLOWED_LIST += ro.dalvik.vm.native.bridge ro.dalvik.vm.isa.arm64 \
+    ro.enable.native.bridge.exec
 PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
-    system/lib64/libarmtr_bridge.so system/bin/armtr/% system/lib64/armtr/% system/etc/ld.config.arm64.txt
+    system/lib64/libarmtr_bridge.so system/bin/armtr/% system/lib64/armtr/% system/etc/ld.config.arm64.txt \
+    system/bin/armtr-run system/etc/init/armtr-run.rc system/etc/binfmt_misc/arm64_exe system/etc/binfmt_misc/arm64_dyn
 endif
+
+# Remote testing on real hardware: adbd also listens on TCP 5555. Optional host keys for adb auth come from
+# device/ours/pc_x86_64/adb_keys (not in git; copy of ~/.android/adbkey.pub).
+PRODUCT_PRODUCT_PROPERTIES += persist.adb.tcp.port=5555
+PRODUCT_ADB_KEYS := $(wildcard device/ours/pc_x86_64/adb_keys)

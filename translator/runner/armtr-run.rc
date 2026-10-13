@@ -1,0 +1,9 @@
+# arm64 executables (apps' lib*.so tools via ProcessBuilder/Runtime.exec, guest execve) -> /system/bin/armtr-run
+# through binfmt_misc. Same switch and layout as Berberis' berberis.rc (ro.enable.native.bridge.exec=1).
+# Flags POF: P keep argv[0], O pass AT_EXECFD (armtr-run's binfmt mode marker), F interpreter opened now.
+on early-init && property:ro.enable.native.bridge.exec=1
+    mount binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc
+
+on property:ro.enable.native.bridge.exec=1 && property:ro.dalvik.vm.isa.arm64=x86_64
+    copy /system/etc/binfmt_misc/arm64_exe /proc/sys/fs/binfmt_misc/register
+    copy /system/etc/binfmt_misc/arm64_dyn /proc/sys/fs/binfmt_misc/register

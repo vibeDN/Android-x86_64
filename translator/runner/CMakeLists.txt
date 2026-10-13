@@ -18,8 +18,8 @@ find_package(Threads REQUIRED)
 add_executable(armtr-run armtr_run.cpp ${T}/runtime/guest_rt.cpp
   ${T}/engine/engine.cc ${T}/engine/uc_repair.c
   ${T}/loader/loader.cpp ${T}/syscalls/syscalls.cpp
-  ${T}/proxy/proxy_core.cpp ${T}/proxy/proxy_va.cpp ${T}/proxy/proxy_jni.cpp)
-target_include_directories(armtr-run PRIVATE ${T}/include ${T}/runtime ${T}/loader/include ${T}/syscalls ${T}/proxy ${ARMTR_JNI_INCLUDE_DIR})
+  ${T}/proxy/proxy_core.cpp ${T}/proxy/proxy_va.cpp ${T}/proxy/proxy_jni.cpp ${T}/hostlibs/hostlibs.cpp)
+target_include_directories(armtr-run PRIVATE ${T}/include ${T}/runtime ${T}/loader/include ${T}/syscalls ${T}/proxy ${T}/hostlibs ${ARMTR_JNI_INCLUDE_DIR})
 set_source_files_properties(${T}/engine/engine.cc ${T}/engine/uc_repair.c PROPERTIES INCLUDE_DIRECTORIES
   "${UNICORN_DIR}/src/include;${UNICORN_DIR}/src/qemu/include;${UNICORN_DIR}/src/qemu;${UNICORN_DIR}/src/glib_compat;${UNICORN_DIR}/build")
 target_compile_options(armtr-run PRIVATE -Wall)

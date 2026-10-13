@@ -77,5 +77,11 @@ prebuilt_renderscript_bitcode {
         "guest/system/lib64/armtr/libGLESv2.so",
         "guest/system/lib64/armtr/libGLESv3.so",
         "guest/system/lib64/armtr/libOpenSLES.so",
+        "guest/system/lib64/armtr/libstdc++.so",
+        "guest/system/lib64/armtr/libmediandk.so",
+        "guest/system/lib64/armtr/libcamera2ndk.so",
+        "guest/system/lib64/armtr/libsync.so",
+        "guest/system/lib64/armtr/libaaudio.so",
+        "guest/system/lib64/armtr/libvulkan.so",
     ],
 }

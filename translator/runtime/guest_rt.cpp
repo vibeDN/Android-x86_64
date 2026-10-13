@@ -4,6 +4,7 @@
 
 #include <elf.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <linux/futex.h>
 #include <pthread.h>
@@ -30,8 +31,10 @@ constexpr size_t kThreadHostStack = 2 << 20;
 constexpr uint64_t kExeBase = 0x5500000000ull;     // like the kernel's ELF_ET_DYN_BASE for PIE
 constexpr uint64_t kInterpBase = 0x7e00000000ull;  // ET_DYN interpreter
 constexpr uint64_t kNeverAddr = 0x1000;            // stop address of armtr_run: guest code never gets there
+constexpr const char* kDevLinker = "/system/bin/armtr/linker64";
 
 std::string g_sysroot, g_self_exe;
+uint64_t g_start_stack;                  // initial guest sp of the last setup_exec (startstack in /proc/self/stat)
 bool g_trace = false;
 armtr_syscall_intercept_fn g_hook;
 armtr_cpu* g_main_cpu;
@@ -66,6 +69,28 @@ bool mapped_prefix(const char* p) {
     if (!strncmp(p, x, n) && (p[n] == '/' || p[n] == 0)) return true;
   }
   return false;
+}
+
+// /proc/self/stat with field 28 (startstack) = the guest's initial sp: bionic's main-thread pthread_getattr_np
+// looks up the mapping containing it (Go's cgo checks its stack bounds with that). Returns an fd or -errno.
+int64_t fake_proc_stat(uint64_t flags) {
+  char b[4096];
+  int fd = open("/proc/self/stat", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return -errno;
+  ssize_t n = read(fd, b, sizeof b - 1);
+  close(fd);
+  if (n <= 0) return -EIO;
+  b[n] = 0;
+  std::string s(b);
+  size_t p = s.rfind(')');   // comm may contain spaces; fields 3.. follow
+  for (int f = 2; p != std::string::npos && f < 28; f++) p = s.find(' ', p + 1);
+  if (p == std::string::npos) return -EIO;
+  size_t e = s.find(' ', p + 1);
+  s.replace(p + 1, e - p - 1, std::to_string(g_start_stack));
+  int m = memfd_create("stat", (flags & O_CLOEXEC) ? MFD_CLOEXEC : 0);
+  if (m < 0) return -errno;
+  if (write(m, s.data(), s.size()) != (ssize_t)s.size() || lseek(m, 0, SEEK_SET) != 0) { close(m); return -EIO; }
+  return m;
 }
 
 // Rewrites the path argument at index `pi`, then lets the normal syscall layer run with the new pointer.
@@ -308,12 +333,19 @@ int64_t intercept(armtr_cpu* cpu, uint64_t nr, const uint64_t a[6], void*) {
       if (r == 0 && a[1] && !armtr_syscalls_get_sigaction((int)a[0], &nw)) update_host_action((int)a[0], nw);
       return r;
     }
+    case 220: case 435: {   // clone, clone3: 0 is only returned in a forked child (guest threads start elsewhere)
+      int64_t r = armtr_syscall(cpu, nr, a, nullptr);
+      if (r == 0) g_threads = 0;   // the parent's guest threads do not exist here (else exit() waits forever)
+      return r;
+    }
     case 139: return do_sigreturn(cpu);   // rt_sigreturn
     case 96:   // set_tid_address: the host libc owns the host thread's clear_child_tid; emulate it ourselves
       t_clear_tid = a[0];
       return rawsc(SYS_gettid);
     case 56: {                                                       // openat
       char buf[32];
+      if (g_start_stack && guest_str(a[1], buf, sizeof buf) && !strcmp(buf, "/proc/self/stat"))
+        return fake_proc_stat(a[2]);
       if (!g_self_exe.empty() && guest_str(a[1], buf, sizeof buf) && !strcmp(buf, "/proc/self/exe")) {
         std::string host;
         if (!map_path(g_self_exe.c_str(), &host)) host = g_self_exe;
@@ -549,6 +581,10 @@ bool setup_exec(armtr_cpu* cpu, const std::string& exe_path, const std::string& 
   if (!interp.empty()) {
     std::string host;
     if (!map_path(interp.c_str(), &host)) host = interp;
+    // Device layout: /system/bin/linker64 is the host's; the guest linker is /system/bin/armtr/linker64.
+    std::string dev = kDevLinker;
+    map_path(kDevLinker, &dev);
+    if (interp == "/system/bin/linker64" && access(dev.c_str(), R_OK) == 0) host = dev;
     lin = armtr_load_raw(host.c_str(), kInterpBase, e, sizeof e);
     if (!lin) lin = armtr_load_raw(host.c_str(), 0, e, sizeof e);
     if (!lin) { *err = "load interpreter " + host + ": " + e; return false; }
@@ -600,6 +636,7 @@ bool setup_exec(armtr_cpu* cpu, const std::string& exe_path, const std::string& 
   r.pc = armtr_image_entry(lin ? lin : exe);
   armtr_regs_set(cpu, &r);
   out->exe = exe; out->interp = lin; out->entry = r.pc; out->sp = sp;
+  g_start_stack = sp;
   return true;
 }
 

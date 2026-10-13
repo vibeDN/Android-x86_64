@@ -37,6 +37,10 @@ Build tree: `/mnt/storage-adata/aosp15/out-arm64/target/product/module_arm64only
 * crt: `out-arm64/soong/.intermediates/bionic/libc/<crt>/android_arm64_armv8-a/<crt>.o`.
 * NOT built: static `libc.a` / `crtbegin_static` link test (crt objects exist; libc.a is not an install target: add
   `out-arm64/soong/.intermediates/bionic/libc/libc/android_arm64_armv8-a_static/libc.a` as goal, ~5 min incl. analysis).
+* `libstdc++.so` (bionic's minimal C++ runtime: operator new/delete, `__cxa_guard_*`, `__cxa_pure_virtual`; NEEDs only libc),
+  2026-10-13: same script with goal `libstdc++` (~4 min, analysis cached) -> `target/product/module_arm64only/system/lib64/libstdc++.so`,
+  copied to `sysroot-ours/system/lib64/` and shipped in the guest lib dir (doc 07, B2). libdl_android / libc_malloc_debug are
+  not needed by apps (platform-private / only with malloc debug enabled).
 * `libc++_shared.so` (arm64) is not built by Soong here (NDK flavor); copied from
   `prebuilts/clang/host/linux-x86/clang-r563880/android_libc++/ndk/aarch64/lib/libc++_shared.so`.
 

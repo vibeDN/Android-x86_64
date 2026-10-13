@@ -22,11 +22,13 @@ using U = uint64_t;
 struct Ent { const char *name, *sig, *act, *cb; };
 struct ItfDef { const char* name; const Ent* m; int n; };
 struct IidDef { const char *name, *itf; };
+struct DataDef { const char *tab, *name; };
 #include "gen/hostlibs_tables.inc"
 
-enum { L_LOG, L_Z, L_ANDROID, L_JNIGFX, L_EGL, L_GLES2, L_GLES1, L_SLES, L_N };
-struct LibDef { const char* id; const char* hosts[3]; const Ent* tab; size_t n; };
-#define TAB(x) kTab_##x, sizeof(kTab_##x) / sizeof(Ent)
+enum { L_LOG, L_Z, L_ANDROID, L_JNIGFX, L_EGL, L_GLES2, L_GLES1, L_SLES, L_MEDIA, L_CAMERA, L_SYNC, L_AAUDIO, L_VULKAN,
+       L_N };
+struct LibDef { const char* id; const char* hosts[3]; const Ent* tab; size_t n; const char* tid; };
+#define TAB(x) kTab_##x, sizeof(kTab_##x) / sizeof(Ent), #x
 const LibDef kLibs[L_N] = {
   {"liblog", {"liblog.so"}, TAB(LOG)},
   {"libz", {"libz.so"}, TAB(Z)},
@@ -36,7 +38,16 @@ const LibDef kLibs[L_N] = {
   {"libGLESv2", {"libGLESv2.so", "libGLESv3.so"}, TAB(GLES2)},
   {"libGLESv1_CM", {"libGLESv1_CM.so"}, TAB(GLES1)},
   {"libOpenSLES", {"libOpenSLES.so"}, TAB(SLES)},
+  {"libmediandk", {"libmediandk.so"}, TAB(MEDIA)},
+  {"libcamera2ndk", {"libcamera2ndk.so"}, TAB(CAMERA)},
+  {"libsync", {"libsync.so"}, TAB(SYNC)},
+  {"libaaudio", {"libaaudio.so"}, TAB(AAUDIO)},
+  {"libvulkan", {"libvulkan.so"}, TAB(VULKAN)},
 };
+const DataDef* find_data(int l, const char* name) {
+  for (const DataDef& d : kData) if (!strcmp(d.tab, kLibs[l].tid) && !strcmp(d.name, name)) return &d;
+  return nullptr;
+}
 
 std::mutex g_mu;                       // guards everything below
 std::string g_dir;
@@ -224,7 +235,7 @@ int itf_for_host_iid(U h) {                  // by pointer, else by content
 
 // ---- generic int-class trampoline --------------------------------------------------------------------
 struct GuestObj { const void* functions; void* host; };   // guest JNIEnv layout, see proxy_core.cpp
-struct CbSpec { int idx; bool sl; char ret; int n; };
+struct CbSpec { int idx; bool sl; char ret; int n; std::vector<std::pair<char, int>> mem; };   // mem: T members
 struct Simple {
   const Ent* e; void* host; int slot; char ret; int nargs; std::vector<CbSpec> cbs;
 };
@@ -233,9 +244,20 @@ Simple* new_simple(const Ent* e, void* host, int slot) {
   Simple* s = new Simple{e, host, slot, e->sig[0], 0, {}};
   const char* p = strchr(e->sig, '(');
   for (p = p ? p + 1 : ""; *p && *p != ')' && *p != '.'; p++) s->nargs++;
-  for (const char* c = e->cb; *c;) {            // "<idx>:<S|->:<ret>(<args>)[;...]"
+  for (const char* c = e->cb; *c;) {            // "<idx>:<S|->:<ret>(<args>)[;...]" or "<idx>:T:<m>,<m>..."
     CbSpec cs{};
     cs.idx = (int)strtol(c, (char**)&c, 10);
+    if (c[1] == 'T') {                          // member: '-' plain, '0' zeroed, "<ret>(<args>)" callback
+      for (c += 3; *c && *c != ';'; c += *c == ',') {
+        std::pair<char, int> m{*c, 0};
+        if (*c == '-' || *c == '0') c++;
+        else { for (c += 2; *c && *c != ')'; c++) m.second++; c++; }
+        cs.mem.push_back(m);
+      }
+      s->cbs.push_back(cs);
+      c += *c == ';';
+      continue;
+    }
     cs.sl = c[1] == 'S'; cs.ret = c[3]; c += 5;
     while (*c && *c != ')') { cs.n++; c++; }
     s->cbs.push_back(cs);
@@ -266,6 +288,8 @@ void simple_tramp(armtr_cpu* cpu, void* user) {
   int na = (int)strlen(act);
   std::vector<U> iids;
   DsCopy ds[2]; LocCopy loc[2]; int nds = 0;
+  std::vector<U> tcopy[4]; int nt = 0;          // T: callback struct copies
+  std::pair<U*, U> swapped[8]; int nsw = 0;     // N: debug callbacks swapped in the guest's create info
   armtr_host_va hv; armtr_va gva;
   U self_host = 0, rv = 0;
   void* fn = s->host;
@@ -306,6 +330,27 @@ void simple_tramp(armtr_cpu* cpu, void* user) {
         a[i] = (U)(void*)&hv.ap;
         break;
       case 'Z': zstream_callbacks(a[i]); break;
+      case 'T':
+        for (const CbSpec& c : s->cbs) {
+          if (c.idx != i || !a[i] || nt == 4) continue;
+          std::vector<U>& v = tcopy[nt++];
+          v.assign((const U*)a[i], (const U*)a[i] + c.mem.size());
+          for (size_t k = 0; k < c.mem.size(); k++) {
+            if (c.mem[k].first == '0') v[k] = 0;
+            else if (c.mem[k].first != '-') v[k] = make_cb(v[k], c.mem[k].first, c.mem[k].second, false);
+          }
+          a[i] = (U)v.data();
+        }
+        break;
+      case 'N':   // ponytail: swapped in place (and restored below); a create info in read-only memory would fault
+        for (U p = a[i]; p && nsw < 8; p = ((const U*)p)[1]) {
+          uint32_t st = *(const uint32_t*)p;
+          U* f = st == 1000128004u ? (U*)(p + 32) : st == 1000011000u ? (U*)(p + 24) : nullptr;   // DEBUG_UTILS_MESSENGER / DEBUG_REPORT
+          if (!f || !*f) continue;
+          swapped[nsw++] = {f, *f};
+          *f = st == 1000128004u ? make_cb(*f, 'u', 4, false) : make_cb(*f, 'u', 8, false);
+        }
+        break;
       default: break;
     }
   }
@@ -331,6 +376,7 @@ void simple_tramp(armtr_cpu* cpu, void* user) {
       default: break;
     }
   }
+  while (nsw) { nsw--; *swapped[nsw].first = swapped[nsw].second; }
 done:
   armtr_px::store_ret(r, s->ret, rv);
   armtr_regs_set(cpu, &r);
@@ -348,11 +394,40 @@ void egl_gpa_tramp(armtr_cpu* cpu, void*) {
   armtr_regs_set(cpu, &r);
 }
 
+// vkGetInstanceProcAddr / vkGetDeviceProcAddr(handle, name): the host's pointer for that handle, wrapped in a
+// proxy with the table signature (cached per host pointer: per-device functions differ).
+uint64_t make_ent(int lib, const Ent& e, void* host);
+void vk_gpa_tramp(armtr_cpu* cpu, void* dev) {
+  armtr_px::CurGuard guard(cpu);
+  armtr_regs r; armtr_regs_get(cpu, &r);
+  const char* name = (const char*)r.x[1];
+  U res = 0;
+  const Ent* e = name ? find_ent(L_VULKAN, name) : nullptr;
+  if (e && (!strcmp(name, "vkGetInstanceProcAddr") || !strcmp(name, "vkGetDeviceProcAddr"))) {
+    res = resolve_in(L_VULKAN, name);
+  } else if (e) {
+    using Gpa = void* (*)(void*, const char*);
+    auto gpa = (Gpa)host_sym(L_VULKAN, dev ? "vkGetDeviceProcAddr" : "vkGetInstanceProcAddr");
+    void* host = gpa ? gpa((void*)r.x[0], name) : nullptr;
+    if (host) {
+      char hp[24];
+      snprintf(hp, sizeof hp, "@%p", host);
+      std::string key = std::string("libvulkan!") + name + hp;
+      { std::lock_guard<std::mutex> l(g_mu); auto it = g_cache.find(key); if (it != g_cache.end()) res = it->second; }
+      if (!res && (res = make_ent(L_VULKAN, *e, host))) { std::lock_guard<std::mutex> l(g_mu); g_cache[key] = res; }
+    }
+  }
+  r.x[0] = res;
+  armtr_regs_set(cpu, &r);
+}
+
 uint64_t make_ent(int lib, const Ent& e, void* host) {
   std::string key;
   const char* nm;
   { std::lock_guard<std::mutex> l(g_mu); g_names.push_back(std::string(kLibs[lib].id) + "!" + e.name); nm = g_names.back().c_str(); }
   if (!strcmp(e.name, "eglGetProcAddress")) return armtr_proxy_make_raw(nm, egl_gpa_tramp, nullptr);
+  if (!strcmp(e.name, "vkGetInstanceProcAddr")) return armtr_proxy_make_raw(nm, vk_gpa_tramp, nullptr);
+  if (!strcmp(e.name, "vkGetDeviceProcAddr")) return armtr_proxy_make_raw(nm, vk_gpa_tramp, (void*)1);
   if (!*e.act && !*e.cb) return armtr_proxy_make(nm, e.sig, host);
   return armtr_proxy_make_raw(nm, simple_tramp, new_simple(&e, host, -1));
 }
@@ -366,6 +441,19 @@ uint64_t resolve_in(int lib, const char* sym) {
     for (auto& i : g_iids) if (!strcmp(i.d->name, sym)) return g_cache[key] = i.slot;
     return 0;
   }
+  if (const DataDef* d = find_data(lib, sym)) {    // extern const char* (AMEDIAFORMAT_KEY_*): guest copy of the string
+    void* hs = host_sym(lib, d->name);
+    const char* str = hs ? *(const char* const*)hs : nullptr;
+    if (!str) return 0;
+    size_t n = strlen(str) + 1;
+    char* copy = (char*)armtr_proxy_data_alloc(n);
+    U* slot = (U*)armtr_proxy_data_alloc(8);
+    if (!copy || !slot) return 0;
+    memcpy(copy, str, n);
+    *slot = (U)copy;
+    std::lock_guard<std::mutex> l(g_mu);
+    return g_cache[key] = (U)slot;
+  }
   const Ent* e = find_ent(lib, sym);
   if (!e) return 0;
   void* host = host_sym(lib, sym);
@@ -373,7 +461,8 @@ uint64_t resolve_in(int lib, const char* sym) {
     using Gpa = void* (*)(const char*);
     if (auto gpa = (Gpa)host_sym(L_EGL, "eglGetProcAddress")) host = gpa(sym);
   }
-  if (!host && strcmp(e->name, "eglGetProcAddress")) return 0;
+  if (!host && strcmp(e->name, "eglGetProcAddress") && strcmp(e->name, "vkGetInstanceProcAddr") &&
+      strcmp(e->name, "vkGetDeviceProcAddr")) return 0;
   uint64_t a = make_ent(lib, *e, host);
   if (a) { std::lock_guard<std::mutex> l(g_mu); g_cache[key] = a; }
   return a;
@@ -386,7 +475,7 @@ uint64_t armtr_hostlibs_resolve(const char* lib_hint, const char* symbol, void*)
   int l = lib_from_hint(lib_hint);
   if (l == -2) return 0;
   if (l >= 0) return resolve_in(l, symbol);
-  for (int k : {L_LOG, L_Z, L_ANDROID, L_JNIGFX, L_EGL, L_GLES2, L_GLES1, L_SLES})
+  for (int k = 0; k < L_N; k++)
     if (uint64_t a = resolve_in(k, symbol)) return a;
   return 0;
 }
@@ -395,9 +484,10 @@ const char* armtr_hostlibs_sig(const char* lib_hint, const char* symbol) {
   if (!symbol) return nullptr;
   int l = lib_from_hint(lib_hint);
   if (l == -2) return nullptr;
-  for (int k : {L_LOG, L_Z, L_ANDROID, L_JNIGFX, L_EGL, L_GLES2, L_GLES1, L_SLES}) {
+  for (int k = 0; k < L_N; k++) {
     if (l >= 0 && k != l) continue;
     if (const Ent* e = find_ent(k, symbol)) return e->sig;
+    if (find_data(k, symbol)) return "data";
     if (k == L_SLES && !strncmp(symbol, "SL_IID_", 7))
       for (const IidDef& d : kIids) if (!strcmp(d.name, symbol)) return "data";
   }

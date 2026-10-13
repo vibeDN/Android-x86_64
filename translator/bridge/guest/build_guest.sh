@@ -20,7 +20,7 @@ $CL $CF -fuse-ld=lld -nostdlib -pie -Wl,-z,max-page-size=16384 -Wl,--build-id=no
   $S/crt/crtbegin_dynamic.o "$HERE/armtr_guest.c" $S/system/lib64/libc.so $S/crt/crtend_android.o \
   -o "$OUT/system/bin/armtr/armtr_guest"
 cp -f $S/system/bin/linker64 "$OUT/system/bin/armtr/linker64"
-for l in libc libm libdl ld-android libc++; do cp -f $S/system/lib64/$l.so "$OUT/system/lib64/armtr/"; done
+for l in libc libm libdl ld-android libc++ libstdc++; do cp -f $S/system/lib64/$l.so "$OUT/system/lib64/armtr/"; done
 [ -f $S/system/lib64/libdl_android.so ] && cp -f $S/system/lib64/libdl_android.so "$OUT/system/lib64/armtr/"
 cp -f "$HERE/ld.config.arm64.txt" "$OUT/system/etc/ld.config.arm64.txt"
 # Guest-side proxy stubs of host platform libraries (liblog, libandroid, ...): see gen_stubs.py

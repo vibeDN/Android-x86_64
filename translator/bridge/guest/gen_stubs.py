@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Generates the guest-side (aarch64) proxy libraries of the host platform libraries the guest Bionic lacks
-(liblog, libz, libandroid, libnativewindow, libjnigraphics, libEGL, libGLESv1_CM, libGLESv2/3, libOpenSLES).
+(liblog, libz, libandroid, libnativewindow, libjnigraphics, libEGL, libGLESv1_CM, libGLESv2/3, libOpenSLES,
+libmediandk, libcamera2ndk, libsync, libaaudio, libvulkan).
 
 Each is a real arm64 .so with the platform library's soname that the guest linker loads like any library.
 It exports every function of that library in translator/hostlibs/gen/hostlibs_tables.inc as a stub:
@@ -12,7 +13,9 @@ It exports every function of that library in translator/hostlibs/gen/hostlibs_ta
           mov x8, x9 ; ldr x17, [x16] ; br x17         // the hostlibs proxy (host function) in desc.target
 
 so args (x0-x7, v0-v7, stack) and x8 reach the hostlibs proxy untouched; the proxy returns to the caller.
-Data symbols (OpenSL ES SL_IID_*) are 8-byte variables filled by an init_array constructor (ARMTR_NR_RESOLVE_DATA).
+Functions listed in hostlibs/gen/skipped.txt (not marshallable) are exported too, so libraries that import them
+still load; they resolve to the bridge's "unavailable host function" stub (logs, returns 0).
+Data symbols (OpenSL ES SL_IID_*, AMEDIAFORMAT_KEY_*...) are 8-byte variables filled by an init_array constructor (ARMTR_NR_RESOLVE_DATA).
 No libc dependency. Usage: gen_stubs.py OUT_DIR   (needs the AOSP clang, see build_guest.sh)
 """
 import os, re, subprocess, sys, tempfile
@@ -25,12 +28,20 @@ NR_RESOLVE, NR_RESOLVE_DATA = 0x4153, 0x4154
 # table id -> guest sonames exporting it
 LIBS = {'LOG': ['liblog.so'], 'Z': ['libz.so'], 'ANDROID': ['libandroid.so', 'libnativewindow.so'],
         'JNIGFX': ['libjnigraphics.so'], 'EGL': ['libEGL.so'], 'GLES2': ['libGLESv2.so', 'libGLESv3.so'],
-        'GLES1': ['libGLESv1_CM.so'], 'SLES': ['libOpenSLES.so']}
+        'GLES1': ['libGLESv1_CM.so'], 'SLES': ['libOpenSLES.so'], 'MEDIA': ['libmediandk.so'],
+        'CAMERA': ['libcamera2ndk.so'], 'SYNC': ['libsync.so'], 'AAUDIO': ['libaaudio.so'], 'VULKAN': ['libvulkan.so']}
 
 
 def parse():
-    tabs, cur, iids = {}, None, []
+    tabs, cur, iids, data = {}, None, [], {}
     for line in open(TABLES):
+        if line.startswith('static const DataDef kData'):
+            cur = 'data'
+            continue
+        m = re.match(r'\s*\{"(\w+)", "(\w+)"\},', line)       # kData {table, name}
+        if m and cur == 'data':
+            data.setdefault(m.group(1), []).append(m.group(2))
+            continue
         m = re.match(r'static const Ent kTab_(\w+)\[\]', line)
         if m:
             cur = tabs.setdefault(m.group(1), [])
@@ -44,7 +55,11 @@ def parse():
         m = re.match(r'\s*\{"(\w+)"', line)
         if m and cur is not None:
             cur.append(m.group(1))
-    return tabs, iids
+    for line in open(os.path.join(os.path.dirname(TABLES), 'skipped.txt')):
+        m = re.match(r'(\w+): (\w+): ', line)                   # "TABLE: function: reason" (not SLES methods)
+        if m and m.group(1) in tabs and m.group(2) not in tabs[m.group(1)]:
+            tabs[m.group(1)].append(m.group(2))
+    return tabs, iids, data
 
 
 def asm(soname, funcs, data):
@@ -74,12 +89,12 @@ def asm(soname, funcs, data):
 
 def main():
     out = sys.argv[1]
-    tabs, iids = parse()
+    tabs, iids, data = parse()
     with tempfile.TemporaryDirectory() as td:
         for tid, sonames in LIBS.items():
             for so in sonames:
                 s = os.path.join(td, so + '.S')
-                open(s, 'w').write(asm(so, tabs[tid], iids if tid == 'SLES' else []))
+                open(s, 'w').write(asm(so, tabs[tid], (iids if tid == 'SLES' else []) + data.get(tid, [])))
                 subprocess.check_call([CLANG, '--target=aarch64-linux-android35', '-shared', '-nostdlib',
                                        '-fuse-ld=lld', '-Wl,-z,max-page-size=16384', '-Wl,--build-id=none',
                                        '-Wl,-soname,' + so, s, '-o', os.path.join(out, so)])

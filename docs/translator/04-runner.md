@@ -28,6 +28,26 @@ Tests: `translator/runner/tests/run_tests.sh /mnt/storage-adata/tmp/run-build/ar
 * Guest signals (`runtime/guest_rt.cpp` + engine hook, see below). A guest fault with no guest handler (SIG_DFL/IGN,
   blocked, or only bionic's linker-installed debuggerd handler) prints pc/lr/sp, the mapped file + offset of pc and exits 139.
 
+## On the device: /system/bin/armtr-run + binfmt_misc (B3)
+* Soong `cc_binary` `armtr-run` (`translator/runner/Android.bp`, static engine/loader/syscalls/runtime/hostlibs/proxy/
+  unicorn). Guest files are the bridge's: PT_INTERP `/system/bin/linker64` is loaded from `/system/bin/armtr/linker64`
+  when that exists (also under `--sysroot`), the guest linker then uses `/system/etc/ld.config.arm64.txt`
+  (`/system`, `/data` -> `/system/lib64/armtr`). Guest proxy libs (liblog, libz, ...) resolve through hostlibs
+  (syscalls 0x4153/0x4154, like the bridge).
+* Exec: kernel binfmt_misc (`CONFIG_BINFMT_MISC=y` already). `armtr-run.rc` (installed via `init_rc`) mounts it on
+  early-init and registers `/system/etc/binfmt_misc/arm64_exe` / `arm64_dyn` (aarch64 ET_EXEC/ET_DYN, OSABI ignored)
+  with interpreter `/system/bin/armtr-run`, flags `POF`. This is the Berberis mechanism (`berberis.rc`), same switch
+  `ro.enable.native.bridge.exec=1` (set in `ours_cf_x86_64_phone.mk`). armtr-run detects binfmt mode by `AT_EXECFD`
+  (O flag): argv = `armtr-run <path> <argv0> <args>`, the host environment is passed unchanged. So app
+  ProcessBuilder/Runtime.exec, `sh -c`, and guest execve of arm64 files all go through the kernel; nothing in the
+  syscalls module (execve passes through).
+* SELinux: not added. The image boots `androidboot.selinux=permissive`. Enforcing would need
+  `allow init binfmt_miscfs:file w_file_perms` and `execmem` for `shell` (apps have execmem already).
+* Fixes found on the way (runtime): fork children reset the guest thread count (a Go child that fails exec ends with
+  the plain `exit` syscall and armtr-run waited for the parent's threads forever); `/proc/self/stat` opened by the
+  guest reports field 28 (startstack) = the guest initial sp, so bionic's main-thread `pthread_getattr_np` finds the
+  guest stack (Go cgo aborted with "bad stack bounds"). Test: `runner/tests/proc_test.c` (M4-proc).
+
 ## Guest signals
 * Async (kill/tgkill/raise, SIGALRM, SIGCHLD, SIGPIPE, ...): a guest handler gets a host handler (`SA_SIGINFO|SA_ONSTACK`, all
   signals masked, never `SA_RESTART`) unless the host already handles that signal (ART/debuggerd in an app keep theirs).
@@ -55,7 +75,8 @@ Tests: `translator/runner/tests/run_tests.sh /mnt/storage-adata/tmp/run-build/ar
 Signals: RT signals are not queued (one pending instance per signal, like standard ones); sigreturn does not restore
 uc_stack (sigaltstack); no extra_context/SVE records; a kick landing in `uc_emu_start`'s prologue waits for the next syscall;
 SS_ONSTACK is not reported by sigaltstack(); bionic's debuggerd handlers in linker64 are never run.
-fork/exec of guest images, proxy/JNIEnv wiring (jni_host_dyn uses a fake VM entirely inside the guest, no host proxies needed).
+exec of arm64 images on a host without our binfmt_misc registration (the host test machine's qemu-aarch64 entry
+takes them), proxy/JNIEnv wiring (jni_host_dyn uses a fake VM entirely inside the guest, no host proxies needed).
 
 ## Cross-module changes made for this
 * loader: `armtr_load_raw()` (additive, `armtr_loader_ext.h`) - map-only load, optional fixed base.

@@ -42,4 +42,19 @@ timeout 20 $RUN --sysroot $S $B/sig_test_dyn dfl >/dev/null 2>&1; rc=$?
 [ $rc = 138 ] && ok M3-sig_dfl_kills || bad "M3-sig_dfl_kills (rc=$rc)"
 out=$(timeout 20 $RUN --sysroot $S $B/sig_test_dyn segv 2>&1); rc=$?
 [ $rc = 139 ] && echo "$out" | grep -q "guest fault: unmapped read: addr=0x8" && ok M3-unhandled_segv || bad "M3-unhandled_segv (rc=$rc)"
+# Process behaviour Go binaries need (proc_test.c): main-thread stack bounds, fork child + exit syscall
+$CL --target=aarch64-linux-android35 -nostdlibinc -O2 -fPIC -isystem $BL/include -isystem $BL/kernel/uapi \
+  -isystem $BL/kernel/uapi/asm-arm64 -isystem $BL/kernel/android/uapi -fuse-ld=lld -nostdlib -pie \
+  -Wl,--dynamic-linker=/system/bin/linker64 -Wl,-z,max-page-size=16384 $SDK/crtbegin_dynamic.o $HERE/proc_test.c \
+  $SDK/libc.so $BI $SDK/crtend_android.o -o $B/proc_test_dyn || exit 1
+out=$(timeout 30 $RUN --sysroot $S $B/proc_test_dyn 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ "$out" = "$(printf 'stack_bounds ok\nfork_exit ok')" ] && ok M4-proc || { bad "M4-proc (rc=$rc)"; echo "$out"; }
+# Exec test: arm64 program execve()s another arm64 program. Compiles and runs under armtr-run;
+# on host with qemu-aarch64 binfmt the inner execve fails (expected), but armtr-run handles it.
+$CL --target=aarch64-linux-android35 -nostdlibinc -O2 -fPIC -isystem $BL/include -isystem $BL/kernel/uapi \
+  -isystem $BL/kernel/uapi/asm-arm64 -isystem $BL/kernel/android/uapi -fuse-ld=lld -nostdlib -pie \
+  -Wl,--dynamic-linker=/system/bin/linker64 -Wl,-z,max-page-size=16384 $SDK/crtbegin_dynamic.o $HERE/exec_hello.c \
+  $SDK/libc.so $BI $SDK/crtend_android.o -o $B/exec_hello_dyn || exit 1
+out=$($RUN --sysroot $S $B/exec_hello_dyn 2>&1); rc=$?
+echo "$out" | grep -q "hello arm64 argc=1" && ok M5-exec_hello || bad "M5-exec_hello (rc=$rc, output: $out)"
 exit $fail
