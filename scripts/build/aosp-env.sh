@@ -6,5 +6,5 @@ export PATH=$HOME/bin:$PATH
 ulimit -n 65536 2>/dev/null
 # 12 threads, 15GB RAM: 8 jobs, never 100% (see care-build-parallelism)
 export NINJA_ARGS="-j4"
-# shell/Claude/kitty are -1000 and children inherit it: make the build itself killable
+# shell/terminal are -1000 and children inherit it: make the build itself killable
 echo 500 > /proc/self/oom_score_adj
