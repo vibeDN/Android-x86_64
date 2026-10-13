@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <linux/futex.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,7 @@ thread_local armtr_cpu* t_cpu = nullptr;
 thread_local int t_depth = 0;
 thread_local uint64_t t_top_sp = 0;
 thread_local armtr_regs* t_capture = nullptr;
+uint64_t g_linker_lo, g_linker_hi;       // guest linker64 image (its debuggerd handlers are not guest handlers)
 
 // ---- safe guest memory access (EFAULT instead of a host crash) ----
 long vm_copy(bool out, uint64_t guest, void* local, size_t n) {
@@ -77,7 +79,212 @@ int64_t with_path(armtr_cpu* cpu, uint64_t nr, const uint64_t a[6], int pi) {
   return armtr_syscall(cpu, nr, b, nullptr);
 }
 
+
+// ---- guest signal delivery ----
+// Guest dispositions live in the syscalls module's table. A guest handler for an asynchronous signal gets a host
+// handler (unless the host already handles that signal itself, e.g. ART/debuggerd in an app) that records the
+// siginfo per guest thread and kicks the thread's cpu; at the next safe point the engine calls on_signal(), which
+// builds the arm64 rt_sigframe on the guest stack. The guest's signal mask *is* the host thread's mask
+// (rt_sigprocmask passes through), so the host kernel does the blocking. Synchronous faults come from the engine.
+constexpr uint64_t kSA_ONSTACK = 0x08000000, kSA_RESTART = 0x10000000, kSA_NODEFER = 0x40000000,
+                   kSA_RESETHAND = 0x80000000, kSA_RESTORER = 0x04000000;
+constexpr size_t kSiginfo = 128, kUc = 128, kMctx = kUc + 176, kResv = kMctx + 288, kFrame = kResv + 4096;  // 4688
+static_assert(kFrame % 16 == 0, "rt_sigframe size");
+constexpr uint32_t kFpsimdMagic = 0x46508001, kFpsimdSize = 528, kEsrMagic = 0x45535201;
+
+struct Pending { std::atomic<uint64_t> bits{0}; siginfo_t info[65]; };
+thread_local Pending t_sig;   // recorded by the host handler on this thread
+Pending g_proc_sig;           // arrived on a thread without guest cpu: first guest thread to pass a safe point
+std::mutex g_act_mu;
+struct sigaction g_host_old[65];
+bool g_host_owned[65];
+// `mov x8, #139; svc #0`: x30 for handlers installed without SA_RESTORER (bionic always passes __restore_rt).
+alignas(16) const uint32_t kSigreturnTramp[2] = {0xD2801168u, 0xD4000001u};
+struct GStack { uint64_t sp; int32_t flags, pad; uint64_t size; };
+
+bool sync_sig(int s) { return s == SIGSEGV || s == SIGBUS || s == SIGILL || s == SIGTRAP || s == SIGFPE; }
+bool linker_handler(uint64_t h) { return h >= g_linker_lo && h < g_linker_hi; }
+uint64_t host_mask() { uint64_t m = 0; rawsc(SYS_rt_sigprocmask, SIG_BLOCK, 0, (long)&m, 8); return m; }
+void set_host_mask(uint64_t m) { rawsc(SYS_rt_sigprocmask, SIG_SETMASK, (long)&m, 0, 8); }
+
+void host_handler(int sig, siginfo_t* si, void*) {   // async-signal-safe
+  armtr_cpu* c = t_cpu;
+  Pending& p = c ? t_sig : g_proc_sig;
+  p.info[sig] = *si;
+  p.bits.fetch_or(1ull << (sig - 1));
+  if (c) armtr_kick(c);
+}
+
+// After the guest changed the disposition of `sig`: make the host deliver it to host_handler, or give it back.
+void update_host_action(int sig, const armtr_guest_sigaction& nw) {
+  if (sig < 1 || sig > 64 || sync_sig(sig) || sig == SIGKILL || sig == SIGSTOP) return;
+  std::lock_guard<std::mutex> l(g_act_mu);
+  if (nw.handler > 1 && !linker_handler(nw.handler)) {
+    if (!g_host_owned[sig]) {
+      struct sigaction cur;
+      if (sigaction(sig, nullptr, &cur)) return;
+      if (!(cur.sa_flags & SA_SIGINFO) && cur.sa_handler != SIG_DFL && cur.sa_handler != SIG_IGN) return;  // host's
+      if ((cur.sa_flags & SA_SIGINFO) && cur.sa_sigaction) return;
+      g_host_old[sig] = cur;
+      g_host_owned[sig] = true;
+    }
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = host_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;   // never SA_RESTART: the guest's own restart rule is applied in on_signal
+    sigfillset(&sa.sa_mask);
+    sigaction(sig, &sa, nullptr);
+  } else if (g_host_owned[sig]) {
+    g_host_owned[sig] = false;
+    if (nw.handler == 0) sigaction(sig, &g_host_old[sig], nullptr);   // SIG_IGN was mirrored by the syscalls module
+  }
+}
+
+void set_guest_action(armtr_cpu* cpu, int sig, const armtr_guest_sigaction& a) {
+  uint64_t k[4] = {a.handler, a.flags, a.restorer, a.mask}, args[6] = {(uint64_t)sig, (uint64_t)k, 0, 8, 0, 0};
+  if (armtr_syscall(cpu, 134, args, nullptr) == 0) update_host_action(sig, a);
+}
+
+// Takes the lowest pending signal not blocked by `mask` (thread queue first).
+int take_pending(uint64_t mask, siginfo_t* out) {
+  uint64_t all = ~0ull, old;
+  rawsc(SYS_rt_sigprocmask, SIG_SETMASK, (long)&all, (long)&old, 8);   // vs. host_handler on this thread
+  int sig = 0;
+  for (Pending* p : {&t_sig, &g_proc_sig}) {
+    uint64_t b = p->bits.load() & ~mask;
+    if (!b) continue;
+    sig = __builtin_ctzll(b) + 1;
+    *out = p->info[sig];
+    p->bits.fetch_and(~(1ull << (sig - 1)));
+    break;
+  }
+  set_host_mask(old);
+  return sig;
+}
+
+// Syscalls the kernel restarts after a handler with SA_RESTART (-ERESTARTSYS paths); others return -EINTR.
+bool restartable(int64_t nr) {
+  switch (nr) {
+    case 29: case 25: case 32: case 56: case 63: case 64: case 65: case 66: case 95: case 202: case 203:
+    case 206: case 207: case 211: case 212: case 242: case 260:
+      return true;   // ioctl fcntl flock openat read write readv writev waitid accept connect sendto recvfrom
+    default:         // sendmsg recvmsg accept4 wait4
+      return false;
+  }
+}
+
+[[noreturn]] void bad_frame(armtr_cpu* cpu, const char* what, uint64_t sp) {
+  fprintf(stderr, "armtr: %s: guest signal frame at 0x%llx not accessible: %s\n", what, (unsigned long long)sp,
+          describe_fault(cpu).c_str());
+  fflush(nullptr);
+  _exit(139);
+}
+
+// Builds the arm64 rt_sigframe (arch/arm64/kernel/signal.c: siginfo, ucontext{sigcontext, fpsimd_context,
+// [esr_context], end}) below the guest sp or on the alternate stack and enters the handler.
+void push_frame(armtr_cpu* cpu, int sig, const void* info, const armtr_guest_sigaction& act, uint64_t fault_addr,
+                uint64_t esr, bool restart, uint64_t orig_x0) {
+  armtr_regs r;
+  armtr_regs_get(cpu, &r);
+  if (restart) { r.pc -= 4; r.x[0] = orig_x0; }
+  GStack ss{};
+  uint64_t qa[6] = {0, (uint64_t)&ss, 0, 0, 0, 0};
+  armtr_syscall(cpu, 132, qa, nullptr);   // current sigaltstack (kept by the syscalls module)
+  bool on_alt = ss.size && r.sp > ss.sp && r.sp - ss.sp <= ss.size;
+  uint64_t sp = r.sp;
+  if ((act.flags & kSA_ONSTACK) && !(ss.flags & 2) && ss.size && !on_alt) sp = ss.sp + ss.size;
+  uint64_t rec = (sp - 16) & ~15ull;   // frame record {x29, x30} for unwinders
+  sp = rec - kFrame;
+  std::vector<uint8_t> f(kFrame, 0);
+  uint8_t* b = f.data();
+  auto put = [&](size_t off, const void* p, size_t n) { memcpy(b + off, p, n); };
+  auto put64 = [&](size_t off, uint64_t v) { put(off, &v, 8); };
+  auto put32 = [&](size_t off, uint32_t v) { put(off, &v, 4); };
+  put(0, info, kSiginfo);
+  put64(kUc + 16, ss.sp);                                        // uc_stack
+  put32(kUc + 24, !ss.size ? 2 : on_alt ? 1 : 0);                // SS_DISABLE / SS_ONSTACK
+  put64(kUc + 32, ss.size);
+  put64(kUc + 40, host_mask());                                  // uc_sigmask
+  put64(kMctx, (sig == SIGSEGV || sig == SIGBUS) ? fault_addr : 0);
+  put(kMctx + 8, r.x, 31 * 8);
+  put64(kMctx + 256, r.sp);
+  put64(kMctx + 264, r.pc);
+  put64(kMctx + 272, r.nzcv & 0xF0000000u);                      // pstate: EL0t + NZCV
+  size_t o = kResv;
+  put32(o, kFpsimdMagic); put32(o + 4, kFpsimdSize); put32(o + 8, r.fpsr); put32(o + 12, r.fpcr);
+  put(o + 16, r.v, 512);
+  o += kFpsimdSize;
+  if (esr) { put32(o, kEsrMagic); put32(o + 4, 16); put64(o + 8, esr); o += 16; }
+  // end marker: already zero
+  uint64_t fr[2] = {r.x[29], r.x[30]};
+  if (vm_copy(true, sp, b, kFrame) != (long)kFrame || vm_copy(true, rec, fr, 16) != 16) bad_frame(cpu, "signal", sp);
+  r.x[0] = (uint64_t)sig; r.x[1] = sp; r.x[2] = sp + kUc;
+  r.sp = sp; r.x[29] = rec;
+  r.x[30] = (act.flags & kSA_RESTORER) && act.restorer ? act.restorer : (uint64_t)kSigreturnTramp;
+  r.pc = act.handler;
+  armtr_regs_set(cpu, &r);
+  set_host_mask(host_mask() | act.mask | ((act.flags & kSA_NODEFER) ? 0 : 1ull << (sig - 1)));
+  if (act.flags & kSA_RESETHAND) set_guest_action(cpu, sig, armtr_guest_sigaction{0, 0, 0, 0});
+}
+
+int64_t do_sigreturn(armtr_cpu* cpu) {
+  armtr_regs r;
+  armtr_regs_get(cpu, &r);
+  std::vector<uint8_t> f(kFrame);
+  uint8_t* b = f.data();
+  if (vm_copy(false, r.sp, b, kFrame) != (long)kFrame) bad_frame(cpu, "rt_sigreturn", r.sp);
+  auto get64 = [&](size_t off) { uint64_t v; memcpy(&v, b + off, 8); return v; };
+  auto get32 = [&](size_t off) { uint32_t v; memcpy(&v, b + off, 4); return v; };
+  memcpy(r.x, b + kMctx + 8, 31 * 8);
+  r.sp = get64(kMctx + 256);
+  r.pc = get64(kMctx + 264);
+  r.nzcv = get64(kMctx + 272) & 0xF0000000u;
+  for (size_t o = kResv; o + 8 <= kFrame;) {   // records; extra_context (SVE/ZA spill) is never produced by us
+    uint32_t magic = get32(o), size = get32(o + 4);
+    if (!magic || size < 8 || o + size > kFrame) break;
+    if (magic == kFpsimdMagic && size >= kFpsimdSize) { r.fpsr = get32(o + 8); r.fpcr = get32(o + 12); memcpy(r.v, b + o + 16, 512); }
+    o += size;
+  }
+  armtr_regs_set(cpu, &r);
+  set_host_mask(get64(kUc + 40));   // may let a pending host signal in: it is delivered after this svc
+  return (int64_t)r.x[0];           // the engine writes the syscall result to x0
+}
+
+// Engine signal hook (see armtr_signal_fn).
+int on_signal(armtr_cpu* cpu, const armtr_fault* ft, int64_t svc_nr, uint64_t svc_x0) {
+  armtr_guest_sigaction act;
+  if (ft) {   // kernel force_sig_fault: a blocked or default/ignored synchronous signal kills the process
+    if (armtr_syscalls_get_sigaction(ft->signo, &act) || act.handler <= 1 || linker_handler(act.handler)) return 0;
+    if (host_mask() & (1ull << (ft->signo - 1))) return 0;
+    uint8_t si[kSiginfo] = {0};
+    int32_t h[3] = {ft->signo, 0, ft->code};
+    memcpy(si, h, 12);
+    memcpy(si + 16, &ft->addr, 8);   // si_addr
+    push_frame(cpu, ft->signo, si, act, ft->addr, ft->esr, false, 0);
+    return 1;
+  }
+  bool first = true;
+  siginfo_t si;
+  while (int sig = take_pending(host_mask(), &si)) {
+    if (armtr_syscalls_get_sigaction(sig, &act) || act.handler == 1) continue;
+    if (act.handler == 0) {   // reset to SIG_DFL after the host signal arrived: default action now
+      if (sig == SIGCHLD || sig == SIGURG || sig == SIGWINCH || sig == SIGCONT) continue;
+      signal(sig, SIG_DFL);
+      raise(sig);
+      continue;
+    }
+    bool restart = first && svc_nr >= 0 && (act.flags & kSA_RESTART) && restartable(svc_nr) &&
+                   [&] { armtr_regs r; armtr_regs_get(cpu, &r); return (int64_t)r.x[0] == -EINTR; }();
+    push_frame(cpu, sig, &si, act, 0, 0, restart, svc_x0);
+    first = false;
+  }
+  return 0;
+}
+
 int64_t intercept(armtr_cpu* cpu, uint64_t nr, const uint64_t a[6], void*) {
+  // Re-arm delivery of queued signals (unblocked by this rt_sigprocmask/rt_sigreturn, or process-wide ones).
+  if (cpu && (t_sig.bits.load(std::memory_order_relaxed) || g_proc_sig.bits.load(std::memory_order_relaxed)))
+    armtr_kick(cpu);
   if (g_trace) {
     const char* n = armtr_syscall_name(nr);
     fprintf(stderr, "[%ld sys %s(%llu) %llx %llx %llx %llx]\n", rawsc(SYS_gettid), n ? n : "?", (unsigned long long)nr,
@@ -95,6 +302,13 @@ int64_t intercept(armtr_cpu* cpu, uint64_t nr, const uint64_t a[6], void*) {
       if (cpu == g_main_cpu) g_main_exit = (int)a[0];
       armtr_stop(cpu);
       return 0;
+    case 134: {   // rt_sigaction: recorded by the syscalls module, the host side is ours
+      int64_t r = armtr_syscall(cpu, nr, a, nullptr);
+      armtr_guest_sigaction nw;
+      if (r == 0 && a[1] && !armtr_syscalls_get_sigaction((int)a[0], &nw)) update_host_action((int)a[0], nw);
+      return r;
+    }
+    case 139: return do_sigreturn(cpu);   // rt_sigreturn
     case 96:   // set_tid_address: the host libc owns the host thread's clear_child_tid; emulate it ourselves
       t_clear_tid = a[0];
       return rawsc(SYS_gettid);
@@ -266,6 +480,8 @@ int init() {
     rc = armtr_init();
     armtr_syscalls_set_intercept(intercept, nullptr);
     armtr_syscalls_set_thread_hook(thread_hook, nullptr);
+    armtr_set_signal_hook(on_signal);
+    armtr_mem_map((uint64_t)kSigreturnTramp, sizeof kSigreturnTramp, 5);
   });
   return rc;
 }
@@ -336,6 +552,10 @@ bool setup_exec(armtr_cpu* cpu, const std::string& exe_path, const std::string& 
     lin = armtr_load_raw(host.c_str(), kInterpBase, e, sizeof e);
     if (!lin) lin = armtr_load_raw(host.c_str(), 0, e, sizeof e);
     if (!lin) { *err = "load interpreter " + host + ": " + e; return false; }
+    // Its address range: bionic's linker installs debuggerd signal handlers, which armtr does not run (a guest
+    // crash is reported by armtr / the host's debuggerd instead).
+    g_linker_lo = armtr_image_base(lin);
+    g_linker_hi = g_linker_lo + armtr_image_size(lin);
   }
   uint64_t phdr = 0, phnum = 0, phent = 0;
   if (armtr_image_phdr(exe, &phdr, &phnum, &phent)) { *err = exe_path + ": program headers not mapped"; return false; }

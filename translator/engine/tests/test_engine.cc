@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <pthread.h>
+#include <signal.h>
+#include <sys/time.h>
 #include <atomic>
 #include "common.h"
 
@@ -31,6 +33,20 @@ static void tramp_nestfault(armtr_cpu* c, void*) {
   armtr_regs r; armtr_regs_get(c, &r); r.x[0] = 77; armtr_regs_set(c, &r);
   munmap(hole, 4096);
 }
+
+static armtr_fault g_seen;
+static uint64_t g_seen_pc;
+static volatile int g_kicks;
+static armtr_cpu* g_kick_cpu;
+static int sig_hook(armtr_cpu* c, const armtr_fault* f, int64_t, uint64_t) {
+  if (!f) { g_kicks++; return 0; }
+  armtr_regs r; armtr_regs_get(c, &r);
+  g_seen = *f; g_seen_pc = r.pc;
+  r.pc += 4; r.x[0] = 42;   // "handler": skip the faulting load
+  armtr_regs_set(c, &r);
+  return 1;
+}
+static void on_alrm(int) { armtr_kick(g_kick_cpu); }
 
 struct Th { uint8_t* g; uint64_t* cell; int n; };
 static void* thr(void* p) {
@@ -125,6 +141,28 @@ int main() {
     CHECK(armtr_trampoline_add(t, tramp_nestfault, 0) == 0);
     uint64_t a[2] = {t, 100};
     CHECK(armtr_call(c, slot(G, F_NEST), a, 2, &r) == 0 && r == 77);
+  }
+  { // signal hook: faults at the exact insn can be resumed; armtr_kick from a host signal while spinning
+    armtr_set_signal_hook(sig_hook);
+    uint8_t* hole = (uint8_t*)mmap(0, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint64_t a[1] = {(uint64_t)hole + 8};
+    CHECK(armtr_call(c, slot(G, F_LOAD), a, 1, &r) == 0 && r == 42);
+    CHECK(g_seen.signo == SIGSEGV && g_seen.code == SEGV_ACCERR && g_seen.addr == (uint64_t)hole + 8 &&
+          g_seen_pc == slot(G, F_LOAD) && (g_seen.esr >> 26) == 0x24);
+    munmap(hole, 4096);
+    a[0] = 0x10;
+    CHECK(armtr_call(c, slot(G, F_LOAD), a, 1, &r) == 0 && r == 42);
+    CHECK(g_seen.signo == SIGSEGV && g_seen.code == SEGV_MAPERR && g_seen.addr == 0x10 && g_seen_pc == slot(G, F_LOAD));
+    g_kick_cpu = c;
+    signal(SIGALRM, on_alrm);
+    struct itimerval it = {{0, 2000}, {0, 2000}}, off = {};
+    setitimer(ITIMER_REAL, &it, nullptr);
+    a[0] = 400000000;
+    CHECK(armtr_call(c, slot(G, F_SPIN), a, 1, &r) == 0 && r == 0);
+    setitimer(ITIMER_REAL, &off, nullptr);
+    printf("  kicks while spinning: %d\n", g_kicks);
+    CHECK(g_kicks > 0);
+    armtr_set_signal_hook(nullptr);
   }
   { // two cpus, two threads, shared counter with ldaxr/stlxr
     uint64_t* cell = (uint64_t*)mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

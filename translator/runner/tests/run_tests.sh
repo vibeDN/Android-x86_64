@@ -25,4 +25,21 @@ out=$(timeout 60 $RUN --sysroot $S $T/pthread_test_dyn 2>/dev/null); rc=$?
 [ $rc = 0 ] && [ "$out" = "counter=80000 atomic=80000 tls_bad=0 main_tls=0" ] && ok M2-pthread_test_dyn || bad M2-pthread_test_dyn
 out=$(cd $T && $RUN --sysroot $S ./jni_host_dyn 2>/dev/null); rc=$?
 [ $rc = 0 ] && [ "$out" = "onload=0x10006 n=1 name=add sig=(II)I add(5,7)=22 add2=23" ] && ok M2-jni_host_dyn || bad M2-jni_host_dyn
+# Guest signals (sig_test.c, bionic dynamic; flags as in translator/tests/build.sh)
+A=/mnt/storage-adata/aosp15; SDK=$A/prebuilts/runtime/mainline/runtime/sdk/android/arm64/lib; BL=$A/bionic/libc
+BI=$(ls -d $(dirname $CL)/../lib/clang/*/lib/linux)/libclang_rt.builtins-aarch64-android.a
+$CL --target=aarch64-linux-android35 -nostdlibinc -O2 -fPIC -isystem $BL/include -isystem $BL/kernel/uapi \
+  -isystem $BL/kernel/uapi/asm-arm64 -isystem $BL/kernel/android/uapi -fuse-ld=lld -nostdlib -pie \
+  -Wl,--dynamic-linker=/system/bin/linker64 -Wl,-z,max-page-size=16384 $SDK/crtbegin_dynamic.o $HERE/sig_test.c \
+  $SDK/libc.so $SDK/libdl.so $BI $SDK/crtend_android.o -o $B/sig_test_dyn || exit 1
+out=$(timeout 60 $RUN --sysroot $S $B/sig_test_dyn 2>/dev/null); rc=$?
+want="raise_siginfo_mask nodefer_resethand regs_preserved alarm_busy_loop timer_storm read_sa_restart read_eintr segv_null_read
+segv_unmapped_read segv_prot_write segv_hot_write sigill_udf sigtrap_brk stack_overflow_altstack sigpipe_handler
+sigpipe_ignored sigchld"
+exp=$(for t in $want; do echo "$t ok"; done; echo done)
+[ $rc = 0 ] && [ "$out" = "$exp" ] && ok M3-signals || { bad M3-signals; diff <(echo "$exp") <(echo "$out"); }
+timeout 20 $RUN --sysroot $S $B/sig_test_dyn dfl >/dev/null 2>&1; rc=$?
+[ $rc = 138 ] && ok M3-sig_dfl_kills || bad "M3-sig_dfl_kills (rc=$rc)"
+out=$(timeout 20 $RUN --sysroot $S $B/sig_test_dyn segv 2>&1); rc=$?
+[ $rc = 139 ] && echo "$out" | grep -q "guest fault: unmapped read: addr=0x8" && ok M3-unhandled_segv || bad "M3-unhandled_segv (rc=$rc)"
 exit $fail

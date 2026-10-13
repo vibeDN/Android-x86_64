@@ -9,8 +9,12 @@
 //    (UC_ERR_*_UNMAPPED) with exact pc/address. Accesses inside the window to pages that are unmapped
 //    on the host raise a host SIGSEGV/SIGBUS inside translated code; a chained handler (active only
 //    while this thread is inside uc_emu_start, not inside svc/trampoline callbacks) siglongjmps out of
-//    uc_emu_start, repairs Unicorn's nesting counter and reports a guest fault. Guest regs/pc are then
-//    only approximate (state at the last translation block boundary).
+//    uc_emu_start, repairs Unicorn's nesting counter and reports a guest fault (regs/pc made exact, see below).
+//  * Guest signals: a fault (Unicorn-unmapped access, host SIGSEGV/SIGBUS in translated code, UDF, BRK) is
+//    turned into an armtr_fault at the exact faulting instruction (cpu_restore_state from the host pc, or from
+//    the helper's return address found on the abandoned host stack) and offered to the signal hook, which may
+//    redirect the cpu into a guest handler; armtr_run then simply continues. armtr_kick (host signal handler)
+//    sets a flag + uc_emu_stop; the hook runs after the current syscall/trampoline or when uc_emu_start returns.
 //  * Trampolines: a 8-byte stub `svc #0xFFFF; ret` is written at the trampoline address; the SVC
 //    interrupt hook recognises imm 0xFFFF, looks the stub up, calls the host fn and the `ret` returns to
 //    x30. This stays inside one uc_emu_start (a UC_HOOK_CODE + uc_reg_write(PC) would stop emulation and
@@ -21,6 +25,8 @@
 extern "C" {  // uc_repair.c (Unicorn internals, pinned to 2.1.4)
 int armtr_uc_nested_level(uc_engine*);
 void armtr_uc_repair(uc_engine*, int nested_level);
+void armtr_uc_unstop(uc_engine*);
+int armtr_uc_restore(uc_engine*, uintptr_t host_pc);
 }
 
 #include <setjmp.h>
@@ -29,6 +35,7 @@ void armtr_uc_repair(uc_engine*, int nested_level);
 #include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ucontext.h>
 
 #include <mutex>
 #include <shared_mutex>
@@ -58,6 +65,7 @@ uint64_t g_log_base = 0;              // absolute index of g_log[0]
 constexpr size_t kLogMax = 4096;
 bool g_inited = false;
 struct sigaction g_old_segv, g_old_bus;
+armtr_signal_fn g_sig_hook;
 
 }  // namespace
 
@@ -70,7 +78,9 @@ struct armtr_cpu {
   void* stack_map = nullptr;
   size_t stack_map_len = 0;
   uint64_t log_cursor = 0;
-  int depth = 0;
+  volatile int depth = 0;
+  volatile sig_atomic_t kicked = 0;   // armtr_kick: call the signal hook at the next safe point
+  bool exit_req = false;     // armtr_stop: leave armtr_run
   bool failed = false;       // error pending (set by hooks)
   int fault_kind = F_NONE;
   uint64_t fault_addr = 0, fault_pc = 0;
@@ -84,6 +94,9 @@ struct Frame {
   armtr_cpu* cpu;
   bool active;     // true while inside Unicorn (not in a host callback)
   uint64_t addr;
+  int sig, code;   // host fault
+  uint64_t host_pc, host_err;
+  uint64_t stk[256];  // copy of the abandoned host stack above the fault (helper return address lookup)
   Frame* prev;
 };
 thread_local Frame* t_top = nullptr;
@@ -105,6 +118,15 @@ void on_segv(int sig, siginfo_t* si, void* uc) {
   Frame* f = t_top;
   if (f && f->active) {
     f->addr = (uint64_t)si->si_addr;
+    f->sig = sig; f->code = si->si_code;
+    const greg_t* g = ((ucontext_t*)uc)->uc_mcontext.gregs;
+    f->host_pc = (uint64_t)g[REG_RIP]; f->host_err = (uint64_t)g[REG_ERR];
+    // The stack between the fault and this Frame belongs to Unicorn (and is abandoned): keep its first words.
+    uint64_t sp = (uint64_t)g[REG_RSP], end = (uint64_t)f;
+    size_t n = sp < end ? (end - sp) / 8 : 0;
+    if (n > 256) n = 256;
+    memset(f->stk, 0, sizeof f->stk);
+    memcpy(f->stk, (const void*)sp, n * 8);
     siglongjmp(f->jb, 1);
   }
   chain(sig, si, uc, sig == SIGSEGV ? &g_old_segv : &g_old_bus);
@@ -122,7 +144,20 @@ uint64_t rd(uc_engine* uc, int reg) { uint64_t v = 0; uc_reg_read(uc, reg, &v); 
 void on_intr(uc_engine* uc, uint32_t no, void* ud) {
   armtr_cpu* c = (armtr_cpu*)ud;
   uint64_t pc = rd(uc, UC_ARM64_REG_PC);
-  if (no != kExcpSwi) { set_err(c, "unhandled exception", F_OTHER, 0, pc); uc_emu_stop(uc); return; }
+  if (no != kExcpSwi) {
+    // QEMU leaves pc at the faulting insn for these. Kernel: SIGILL ILL_ILLOPC / SIGTRAP TRAP_BRKPT, si_addr=pc.
+    armtr_fault ft = {0, 0, pc, 0};
+    if (no == 1) ft = {4, 1, pc, 0};                                                          // EXCP_UDEF
+    else if (no == 7) ft = {5, 1, pc, 0};   // EXCP_BKPT (send_user_sigtrap: no esr_context)
+    else if (no == 4) ft = {7, 1, 0, 0x92000021u};          // EXCP_DATA_ABORT: alignment -> SIGBUS BUS_ADRALN
+    if (ft.signo && g_sig_hook) {
+      GuestScope gs;
+      if (g_sig_hook(c, &ft, -1, 0)) return;
+    }
+    set_err(c, no == 1 ? "undefined instruction" : no == 7 ? "brk" : "unhandled exception", F_OTHER, 0, pc);
+    uc_emu_stop(uc);
+    return;
+  }
   GuestScope gs;
   uint32_t insn = *(const uint32_t*)(pc - 4);  // identity memory; pc is already past the svc
   if (insn == kStubSvc) {
@@ -144,6 +179,11 @@ void on_intr(uc_engine* uc, uint32_t no, void* ud) {
   int64_t r = c->svc ? c->svc(c, v[0], v + 1, c->svc_user) : -38;
   uint64_t x0 = (uint64_t)r;
   uc_reg_write(uc, UC_ARM64_REG_X0, &x0);
+  if (c->kicked && g_sig_hook && !c->exit_req) {   // e.g. a host signal interrupted this syscall
+    c->kicked = 0;
+    g_sig_hook(c, nullptr, (int64_t)v[0], v[1]);
+    if (!c->kicked) armtr_uc_unstop(uc);   // handled here: no need to leave uc_emu_start
+  }
 }
 
 bool on_unmapped(uc_engine* uc, uc_mem_type t, uint64_t addr, int, int64_t, void* ud) {
@@ -151,6 +191,8 @@ bool on_unmapped(uc_engine* uc, uc_mem_type t, uint64_t addr, int, int64_t, void
   int k = (t == UC_MEM_READ_UNMAPPED) ? F_READ : (t == UC_MEM_WRITE_UNMAPPED) ? F_WRITE : F_FETCH;
   set_err(c, k == F_READ ? "unmapped read" : k == F_WRITE ? "unmapped write" : "unmapped fetch", k, addr,
           rd(uc, UC_ARM64_REG_PC));
+  // Unicorn synced pc/regs before this hook, but returning false would let the rest of the TB run on. Leave now.
+  if (t_top && t_top->active && t_top->cpu == c) siglongjmp(t_top->jb, 2);
   return false;
 }
 
@@ -317,37 +359,82 @@ int armtr_trampoline_add(uint64_t addr, armtr_trampoline_fn fn, void* user) {
   return 0;
 }
 
+// After a host fault in translated code (Frame filled by on_segv): make regs exact and describe it like the kernel.
+static armtr_fault host_fault(armtr_cpu* c, Frame& f) {
+  uc_engine* uc = c->uc;
+  bool exact = armtr_uc_restore(uc, f.host_pc + 2);   // the fault is in translated code itself (fast path)
+  uint64_t pc = rd(uc, UC_ARM64_REG_PC);
+  bool fetch = !exact && ((f.addr ^ pc) >> 12) == 0;   // translating the insn at pc touched the bad page
+  if (fetch) f.addr = pc;
+  // Otherwise it is in a helper called from translated code: its return address is on the host stack.
+  for (int i = 0; !exact && !fetch && i < 256; i++) exact = f.stk[i] && armtr_uc_restore(uc, f.stk[i]);
+  int segv_acc = f.sig == SIGSEGV && f.code == 2;   // SEGV_ACCERR
+  uint64_t fsc = segv_acc ? 0x0F : 0x07;               // permission / translation fault, level 3
+  uint64_t esr = fetch ? 0x82000000u | fsc : 0x92000000u | ((f.host_err & 2) ? 0x40 : 0) | fsc;
+  return armtr_fault{f.sig, f.code, f.addr, esr};
+}
+
 int armtr_run(armtr_cpu* c, uint64_t stop_addr) {
   uc_engine* uc = c->uc;
-  c->failed = false; c->err[0] = 0; c->fault_kind = F_NONE;
   if (c->depth == 0) sync_cache(c);
-  uint64_t pc = rd(uc, UC_ARM64_REG_PC);
   Frame f; f.cpu = c; f.active = false; f.addr = 0; f.prev = t_top;
   int saved_nested = armtr_uc_nested_level(uc);
   int rc = 0;
   c->depth++;
+  c->exit_req = false;
   t_top = &f;
-  if (sigsetjmp(f.jb, 0)) {
-    // Host fault inside translated code: Unicorn's frames were abandoned; repair its bookkeeping.
-    armtr_uc_repair(uc, saved_nested);
-    set_err(c, "host-unmapped guest access", F_OTHER, f.addr, rd(uc, UC_ARM64_REG_PC));
-    rc = -1;
-  } else {
+  for (;;) {
+    c->failed = false; c->err[0] = 0; c->fault_kind = F_NONE;
+    if (c->kicked && g_sig_hook) { c->kicked = 0; g_sig_hook(c, nullptr, -1, 0); }
+    uint64_t pc = rd(uc, UC_ARM64_REG_PC);
+    if (int jr = sigsetjmp(f.jb, 0)) {
+      // Left Unicorn by siglongjmp (host fault: 1, Unicorn-unmapped access: 2): repair its bookkeeping.
+      f.active = false;
+      armtr_uc_repair(uc, saved_nested);
+      armtr_fault ft;
+      if (jr == 1) {
+        ft = host_fault(c, f);
+      } else {
+        bool kern = c->fault_addr >> 55 & 1;   // kernel half: level 0 translation fault
+        uint64_t fsc = kern ? 0x04 : 0x07;
+        ft = {SIGSEGV, 1 /*SEGV_MAPERR*/, c->fault_addr,
+              c->fault_kind == F_FETCH ? 0x82000000u | fsc : 0x92000000u | (c->fault_kind == F_WRITE ? 0x40 : 0) | fsc};
+        uint64_t fpc = c->fault_kind == F_FETCH ? c->fault_addr : c->fault_pc;
+        uc_reg_write(uc, UC_ARM64_REG_PC, &fpc);
+      }
+      if (g_sig_hook && g_sig_hook(c, &ft, -1, 0)) continue;
+      if (jr == 1) set_err(c, "host-unmapped guest access", F_OTHER, f.addr, rd(uc, UC_ARM64_REG_PC));
+      rc = -1;
+      break;
+    }
     f.active = true;
     uc_err e = uc_emu_start(uc, pc, stop_addr, 0, 0);
     f.active = false;
-    if (c->failed) rc = -1;
-    else if (e != UC_ERR_OK) {
+    if (c->failed) { rc = -1; break; }
+    if (e != UC_ERR_OK) {
       set_err(c, uc_strerror(e), F_OTHER, 0, rd(uc, UC_ARM64_REG_PC));
       rc = -1;
+      break;
     }
+    if (c->exit_req || rd(uc, UC_ARM64_REG_PC) == stop_addr) break;
+    // Stopped by armtr_kick: the loop head runs the signal hook, then emulation resumes.
+    // ponytail: a kick landing inside uc_emu_start's prologue (it clears stop_request) waits for the next
+    // syscall/trampoline or run entry; closing that needs a Unicorn patch.
   }
+  c->exit_req = false;
   t_top = f.prev;
   c->depth--;
   return rc;
 }
 
-void armtr_stop(armtr_cpu* c) { uc_emu_stop(c->uc); }
+void armtr_stop(armtr_cpu* c) { c->exit_req = true; uc_emu_stop(c->uc); }
+
+void armtr_kick(armtr_cpu* c) {
+  c->kicked = 1;
+  if (c->depth > 0) uc_emu_stop(c->uc);   // plain stores (stop_request, cpu_exit): async-signal-safe
+}
+
+void armtr_set_signal_hook(armtr_signal_fn fn) { g_sig_hook = fn; }
 
 void armtr_cpu_stack(armtr_cpu* c, uint64_t* base, size_t* size) {
   if (base) *base = c->stack_base;

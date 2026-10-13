@@ -61,6 +61,22 @@ void armtr_cpu_stack(armtr_cpu*, uint64_t* base, size_t* size);
 // pc is exact for unmapped faults, approximate (start of the translation block) for host SIGSEGV faults.
 int  armtr_fault_info(armtr_cpu*, uint64_t* addr, uint64_t* pc);
 
+// ---- Guest signals (additive) ----
+// A synchronous guest exception, as the arm64 kernel would report it (signo/si_code/si_addr; esr 0 = none).
+typedef struct { int signo, code; uint64_t addr, esr; } armtr_fault;
+// Called on the cpu's own thread at an exact instruction boundary, registers accessible (armtr_regs_get/set):
+//   fault != NULL: synchronous exception at regs.pc (SIGSEGV/SIGBUS from guest memory accesses, SIGILL for an
+//     undefined instruction, SIGTRAP for brk). Return 1 if the registers now enter a guest handler (execution
+//     continues), 0 to fail armtr_run with the fault as before.
+//   fault == NULL: armtr_kick() was called. svc_nr >= 0: the guest just returned from that syscall (pc past the
+//     svc, x0 = result, svc_x0 = its original x0, so a restart is possible). Return value ignored.
+typedef int (*armtr_signal_fn)(armtr_cpu*, const armtr_fault* fault, int64_t svc_nr, uint64_t svc_x0);
+void armtr_set_signal_hook(armtr_signal_fn fn);
+// Async-signal-safe (call it on the cpu's own thread, e.g. from a host signal handler): the cpu calls the signal
+// hook at its next safe point: right away if it is inside a syscall/trampoline or running translated code, or
+// when armtr_run is entered next.
+void armtr_kick(armtr_cpu*);
+
 #ifdef __cplusplus
 }
 #endif
